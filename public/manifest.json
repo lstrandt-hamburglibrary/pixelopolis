@@ -1,0 +1,11 @@
+{
+  "name": "Pixelopolis",
+  "short_name": "Pixelopolis",
+  "description": "A cozy retro 2D city-sim PWA",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "icons": []
+}
