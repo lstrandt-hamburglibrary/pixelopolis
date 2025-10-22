@@ -164,7 +164,7 @@ class _CityScreenState extends State<CityScreen> {
   int gameCycle = 0; // Like SimCity months/cycles
 
   // Grid size - larger grid makes roads appear thinner
-  final int gridSize = 16;
+  final int gridSize = 31;
 
   // Building selection
   CellType? selectedBuilding;
@@ -176,6 +176,9 @@ class _CityScreenState extends State<CityScreen> {
 
   // Game speed control
   GameSpeed gameSpeed = GameSpeed.medium;
+
+  // Challenge mode - infrastructure required for zones to develop
+  bool infrastructureRequired = false;
 
   // Menu category expansion
   String? expandedCategory; // null, 'zones', 'utilities', 'services', 'special'
@@ -222,6 +225,36 @@ class _CityScreenState extends State<CityScreen> {
   List<List<int>> fireCoverage = [];
   List<List<int>> hospitalCoverage = [];
   List<List<int>> schoolCoverage = [];
+
+  // City ratings and statistics (0-100)
+  double crimeRate = 50.0; // Higher = more crime
+  double educationRate = 50.0; // Higher = better education
+  double healthRate = 50.0; // Higher = better health
+  double fireProtectionRate = 50.0; // Higher = better fire protection
+
+  // Ordinances (city policies that can be enacted)
+  Map<String, bool> ordinances = {
+    'legalize_gambling': false, // +income, +crime
+    'neighborhood_watch': false, // -crime, -coins cost
+    'pro_reading_campaign': false, // +education, -coins cost
+    'free_clinics': false, // +health, -coins cost
+    'smoke_detector_program': false, // +fire protection, -coins cost
+    'energy_conservation': false, // -power maintenance cost
+    'tourism_promotion': false, // +commercial demand, +income
+    'recycling_program': false, // -pollution (future), -coins cost
+  };
+
+  // Ordinance costs (monthly)
+  Map<String, int> ordinanceCosts = {
+    'legalize_gambling': -50, // negative = income
+    'neighborhood_watch': 30,
+    'pro_reading_campaign': 25,
+    'free_clinics': 40,
+    'smoke_detector_program': 20,
+    'energy_conservation': 0, // reduces other costs
+    'tourism_promotion': 35,
+    'recycling_program': 30,
+  };
 
   // Unlock requirements (level needed to unlock each building)
   // All unlocked from start for SimCity-style gameplay
@@ -627,6 +660,7 @@ class _CityScreenState extends State<CityScreen> {
     zoneGrowthTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       processZoneGrowth();
       processBuildingEvolution();
+      updateCityStatistics(); // Update crime, education, health stats
     });
 
     // Auto-save every 10 seconds
@@ -688,20 +722,36 @@ class _CityScreenState extends State<CityScreen> {
       });
     });
 
-    // Add initial infrastructure to save setup time
-    // Power plants strategically placed for full coverage
-    // With 8-square radius, 2 power plants in corners provide full coverage
-    cityGrid[1][1] = CellType.powerPlant;
-    cityGrid[gridSize - 2][gridSize - 2] = CellType.powerPlant;
+    // Place power plants at strategic locations
+    cityGrid[9][9] = CellType.powerPlant;
+    cityGrid[21][9] = CellType.powerPlant;
+    cityGrid[9][21] = CellType.powerPlant;
+    cityGrid[21][21] = CellType.powerPlant;
 
-    // Water pumps in other corners for full coverage
-    cityGrid[1][gridSize - 2] = CellType.waterPump;
-    cityGrid[gridSize - 2][1] = CellType.waterPump;
+    // Place water pumps at strategic locations
+    cityGrid[8][9] = CellType.waterPump;
+    cityGrid[22][9] = CellType.waterPump;
+    cityGrid[21][8] = CellType.waterPump;
+    cityGrid[22][22] = CellType.waterPump;
 
-    // Update power and water grids to reflect initial infrastructure
-    // No lines needed - power and water radiate automatically!
-    updatePowerGrid();
-    updateWaterGrid();
+    // Set power and water coverage based on challenge mode
+    if (infrastructureRequired) {
+      // Challenge mode: no coverage, must build infrastructure
+      powerGrid = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => false);
+      });
+      waterGrid = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => false);
+      });
+    } else {
+      // Easy mode: full coverage across entire grid
+      powerGrid = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => true);
+      });
+      waterGrid = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => true);
+      });
+    }
   }
 
   @override
@@ -821,6 +871,59 @@ class _CityScreenState extends State<CityScreen> {
         }
       }
     }
+  }
+
+  // Calculate city statistics based on coverage and ordinances
+  void updateCityStatistics() {
+    // Calculate average coverage across all tiles
+    double avgPoliceCoverage = 0;
+    double avgSchoolCoverage = 0;
+    double avgFireCoverage = 0;
+    double avgHealthCoverage = 0;
+    int count = 0;
+
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        avgPoliceCoverage += policeCoverage[row][col];
+        avgSchoolCoverage += schoolCoverage[row][col];
+        avgFireCoverage += fireCoverage[row][col];
+        avgHealthCoverage += hospitalCoverage[row][col];
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      avgPoliceCoverage /= count;
+      avgSchoolCoverage /= count;
+      avgFireCoverage /= count;
+      avgHealthCoverage /= count;
+    }
+
+    // Crime rate (0-100, higher = more crime)
+    // Base crime starts at 50, good police coverage reduces it
+    crimeRate = 50.0 - (avgPoliceCoverage * 5);
+
+    // Ordinance effects on crime
+    if (ordinances['neighborhood_watch'] == true) crimeRate -= 15;
+    if (ordinances['legalize_gambling'] == true) crimeRate += 20;
+
+    // Clamp to 0-100
+    crimeRate = crimeRate.clamp(0, 100);
+
+    // Education rate (0-100, higher = better)
+    educationRate = 50.0 + (avgSchoolCoverage * 5);
+    if (ordinances['pro_reading_campaign'] == true) educationRate += 10;
+    educationRate = educationRate.clamp(0, 100);
+
+    // Health rate (0-100, higher = better)
+    healthRate = 50.0 + (avgHealthCoverage * 5);
+    if (ordinances['free_clinics'] == true) healthRate += 10;
+    healthRate = healthRate.clamp(0, 100);
+
+    // Fire protection rate (0-100, higher = better)
+    fireProtectionRate = 50.0 + (avgFireCoverage * 5);
+    if (ordinances['smoke_detector_program'] == true) fireProtectionRate += 10;
+    fireProtectionRate = fireProtectionRate.clamp(0, 100);
   }
 
   // Building evolution - buildings automatically upgrade over time
@@ -1353,6 +1456,20 @@ class _CityScreenState extends State<CityScreen> {
             // Negative income = maintenance cost
             expenses += buildingIncome.abs();
           }
+        }
+      }
+    }
+
+    // Add ordinance costs/income
+    for (var entry in ordinances.entries) {
+      if (entry.value == true) {
+        int cost = ordinanceCosts[entry.key] ?? 0;
+        if (cost < 0) {
+          // Negative cost = income (like gambling)
+          income += cost.abs();
+        } else {
+          // Positive cost = expense
+          expenses += cost;
         }
       }
     }
@@ -2038,6 +2155,32 @@ class _CityScreenState extends State<CityScreen> {
                           ),
                         ),
                       ),
+                      // Infrastructure challenge toggle
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            infrastructureRequired = !infrastructureRequired;
+                            // Reinitialize grids based on new mode
+                            initializeCity();
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: infrastructureRequired ? Color(0xFFFF5722) : Color(0xFF4CAF50),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.black, width: 2),
+                          ),
+                          child: Text(
+                            infrastructureRequired ? '⚡ Challenge' : '⚡ Easy',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
                       // Save button
                       GestureDetector(
                         onTap: () {
@@ -2147,6 +2290,39 @@ class _CityScreenState extends State<CityScreen> {
                       _buildDemandBar('I', industrialDemand, Color(0xFFFFEB3B)),
                     ],
                   ),
+                  SizedBox(height: 8),
+                  // City Statistics Row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildStatBar('Crime', crimeRate, Colors.red, inverted: true), // Lower is better
+                      _buildStatBar('Education', educationRate, Colors.blue),
+                      _buildStatBar('Health', healthRate, Colors.green),
+                      _buildStatBar('Fire Safety', fireProtectionRate, Colors.orange),
+                      // Ordinances button
+                      GestureDetector(
+                        onTap: () {
+                          _showOrdinancesDialog(context);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Color(0xFF9C27B0),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.black, width: 2),
+                          ),
+                          child: Text(
+                            '📜 Ordinances',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -2155,62 +2331,64 @@ class _CityScreenState extends State<CityScreen> {
             Expanded(
               child: Stack(
                 children: [
-                  // City grid
-                  Center(
-                    child: Container(
+                  // City grid - zoomed to fit
+                  Positioned.fill(
+                    child: Padding(
                       padding: const EdgeInsets.all(8),
-                      child: AspectRatio(
-                        aspectRatio: 1,
-                        child: GridView.builder(
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: gridSize,
-                            crossAxisSpacing: 1,
-                            mainAxisSpacing: 1,
-                          ),
-                          itemCount: gridSize * gridSize,
-                          itemBuilder: (context, index) {
-                            final row = index ~/ gridSize;
-                            final col = index % gridSize;
-                            final cellType = cityGrid[row][col];
+                      child: Center(
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: GridView.builder(
+                            physics: const NeverScrollableScrollPhysics(),
+                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: gridSize,
+                              crossAxisSpacing: 1,
+                              mainAxisSpacing: 1,
+                            ),
+                            itemCount: gridSize * gridSize,
+                            itemBuilder: (context, index) {
+                              final row = index ~/ gridSize;
+                              final col = index % gridSize;
+                              final cellType = cityGrid[row][col];
 
-                            return GestureDetector(
-                              onTap: () => placeBuilding(row, col),
-                              child: Stack(
-                                children: [
-                                  _buildCell(cellType, row, col),
-                                  // Upgrade stars indicator
-                                  if (cellType != CellType.empty &&
-                                      cellType != CellType.street &&
-                                      buildingUpgrades[row][col] > 0)
-                                    Positioned(
-                                      top: 2,
-                                      right: 2,
-                                      child: Container(
-                                        padding: EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: Colors.black.withOpacity(0.6),
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          '⭐' * buildingUpgrades[row][col],
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            height: 1.0,
+                              return GestureDetector(
+                                onTap: () => placeBuilding(row, col),
+                                child: Stack(
+                                  children: [
+                                    _buildCell(cellType, row, col),
+                                    // Upgrade stars indicator
+                                    if (cellType != CellType.empty &&
+                                        cellType != CellType.street &&
+                                        buildingUpgrades[row][col] > 0)
+                                      Positioned(
+                                        top: 2,
+                                        right: 2,
+                                        child: Container(
+                                          padding: EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withOpacity(0.6),
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            '⭐' * buildingUpgrades[row][col],
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              height: 1.0,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                ],
-                              ),
-                            );
-                          },
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  // Vehicles overlay - pointer events pass through to grid
-                  IgnorePointer(
+                // Vehicles overlay - pointer events pass through to grid
+                IgnorePointer(
                     ignoring: false,
                     child: Center(
                       child: Container(
@@ -2960,6 +3138,139 @@ class _CityScreenState extends State<CityScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildStatBar(String label, double value, Color color, {bool inverted = false}) {
+    // Value ranges from 0 to 100
+    // For inverted stats (like crime), we want low values to be good (green) and high to be bad (red)
+    final normalizedValue = (value / 100.0).clamp(0.0, 1.0);
+
+    // Determine color based on value and whether it's inverted
+    Color barColor;
+    if (inverted) {
+      // For crime: low = good (green), high = bad (red)
+      if (normalizedValue < 0.3) barColor = Colors.green;
+      else if (normalizedValue < 0.6) barColor = Colors.orange;
+      else barColor = Colors.red;
+    } else {
+      // For education/health/fire: high = good (green), low = bad (red)
+      if (normalizedValue > 0.7) barColor = Colors.green;
+      else if (normalizedValue > 0.4) barColor = Colors.orange;
+      else barColor = Colors.red;
+    }
+
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 9,
+            shadows: [Shadow(color: Colors.black, offset: Offset(1, 1))],
+          ),
+        ),
+        SizedBox(height: 2),
+        Container(
+          width: 60,
+          height: 8,
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.3),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: normalizedValue,
+            child: Container(
+              decoration: BoxDecoration(
+                color: barColor,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+        ),
+        Text(
+          '${value.toInt()}',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 8,
+            shadows: [Shadow(color: Colors.black, offset: Offset(1, 1))],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showOrdinancesDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('City Ordinances', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: Container(
+                width: 500,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Enact or repeal city ordinances. Each has benefits and costs.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                      ),
+                      SizedBox(height: 16),
+                      ..._buildOrdinancesList(setDialogState),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildOrdinancesList(StateSetter setDialogState) {
+    final ordinanceInfo = {
+      'legalize_gambling': {'name': '🎰 Legalize Gambling', 'effect': '+\$50/month, +20 crime'},
+      'neighborhood_watch': {'name': '👮 Neighborhood Watch', 'effect': '-15 crime, \$30/month'},
+      'pro_reading_campaign': {'name': '📚 Pro-Reading Campaign', 'effect': '+10 education, \$25/month'},
+      'free_clinics': {'name': '🏥 Free Clinics', 'effect': '+10 health, \$40/month'},
+      'smoke_detector_program': {'name': '🚨 Smoke Detector Program', 'effect': '+10 fire safety, \$20/month'},
+      'energy_conservation': {'name': '⚡ Energy Conservation', 'effect': 'Reduces power costs'},
+      'tourism_promotion': {'name': '🗽 Tourism Promotion', 'effect': '+commercial demand, +income, \$35/month'},
+      'recycling_program': {'name': '♻️ Recycling Program', 'effect': 'Future: -pollution, \$30/month'},
+    };
+
+    return ordinanceInfo.entries.map((entry) {
+      final key = entry.key;
+      final info = entry.value;
+      final isActive = ordinances[key] ?? false;
+      final cost = ordinanceCosts[key] ?? 0;
+
+      return Card(
+        margin: EdgeInsets.symmetric(vertical: 4),
+        child: CheckboxListTile(
+          title: Text(info['name']!, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          subtitle: Text(info['effect']!, style: TextStyle(fontSize: 11)),
+          value: isActive,
+          onChanged: (bool? value) {
+            setState(() {
+              ordinances[key] = value ?? false;
+              updateCityStatistics(); // Recalculate stats immediately
+            });
+            setDialogState(() {}); // Update dialog UI
+          },
+        ),
+      );
+    }).toList();
   }
 }
 
