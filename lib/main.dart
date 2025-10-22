@@ -24,20 +24,60 @@ class PixelopolisApp extends StatelessWidget {
   }
 }
 
-// Cell types - streets and buildings
+// Cell types - SimCity style with zones and infrastructure
 enum CellType {
   street,
   empty,
-  house,
-  shop,
-  office,
-  apartment,
-  factory,
-  bank,
+
+  // Zones (placed by player, develop into buildings)
+  residentialZone,
+  commercialZone,
+  industrialZone,
+
+  // Infrastructure
+  powerPlant,
+  powerLine,
+  waterPump,
+  waterPipe,
+  powerLineAndWaterPipe, // Combined infrastructure for crossing
+
+  // Services
+  policeStation,
+  fireStation,
   hospital,
   school,
+
+  // Developed buildings (created automatically from zones)
+  residentialLow,    // Houses
+  residentialMedium, // Apartments
+  residentialHigh,   // Condos
+  commercialLow,     // Small shops
+  commercialMedium,  // Offices
+  commercialHigh,    // Skyscrapers
+  industrialLow,     // Warehouses
+  industrialMedium,  // Factories
+  industrialHigh,    // Heavy industry
+
+  // Special buildings (don't need roads)
   park,
-  skyscraper,
+  playground,
+  fountain,
+  garden,
+  statue,
+
+  // Additional services
+  library,
+  museum,
+  stadium,
+  cityHall,
+}
+
+// Game speed options
+enum GameSpeed {
+  paused,
+  slow,
+  medium,
+  fast,
 }
 
 class Building {
@@ -108,13 +148,20 @@ class CityScreen extends StatefulWidget {
 
 class _CityScreenState extends State<CityScreen> {
   // Game state
-  int coins = 200;
+  int coins = 5000; // Start with plenty of money for infrastructure
   int population = 0;
   List<List<CellType>> cityGrid = [];
   List<Vehicle> vehicles = [];
   Timer? vehicleSpawnTimer;
   Timer? idleIncomeTimer;
   Timer? vehicleAnimationTimer;
+  Timer? zoneGrowthTimer; // For auto-development of zones
+  Timer? gameClockTimer; // For updating the game clock display
+
+  // Game time tracking
+  DateTime gameStartTime = DateTime.now();
+  int elapsedSeconds = 0;
+  int gameCycle = 0; // Like SimCity months/cycles
 
   // Grid size - larger grid makes roads appear thinner
   final int gridSize = 16;
@@ -122,6 +169,16 @@ class _CityScreenState extends State<CityScreen> {
   // Building selection
   CellType? selectedBuilding;
   bool bulldozerMode = false;
+  bool infoMode = false;
+
+  // Underground view toggle (like original SimCity)
+  bool undergroundView = false;
+
+  // Game speed control
+  GameSpeed gameSpeed = GameSpeed.medium;
+
+  // Menu category expansion
+  String? expandedCategory; // null, 'zones', 'utilities', 'services', 'special'
 
   // Progression system
   int playerLevel = 1;
@@ -135,111 +192,346 @@ class _CityScreenState extends State<CityScreen> {
   // Building upgrades (stores upgrade level 0-2 for each cell)
   List<List<int>> buildingUpgrades = [];
 
+  // Construction progress (0.0 = just started, 1.0 = complete)
+  List<List<double>> constructionProgress = [];
+  Timer? constructionAnimationTimer;
+
+  // Achievement system
+  List<String> unlockedAchievements = [];
+  List<String> achievementNotifications = [];
+  Timer? achievementNotificationTimer;
+
+  // SimCity systems
+  // Power grid - tracks which cells have power
+  List<List<bool>> powerGrid = [];
+  // Water grid - tracks which cells have water
+  List<List<bool>> waterGrid = [];
+
+  // RCI Demand (-100 to +100, positive means demand)
+  double residentialDemand = 50.0;
+  double commercialDemand = 30.0;
+  double industrialDemand = 40.0;
+
+  // Budget system
+  int monthlyIncome = 0;
+  int monthlyExpenses = 0;
+  double taxRate = 7.0; // 7% tax rate
+
+  // Service coverage (stores coverage level 0-10 for each cell)
+  List<List<int>> policeCoverage = [];
+  List<List<int>> fireCoverage = [];
+  List<List<int>> hospitalCoverage = [];
+  List<List<int>> schoolCoverage = [];
+
   // Unlock requirements (level needed to unlock each building)
+  // All unlocked from start for SimCity-style gameplay
   final Map<CellType, int> buildingUnlockLevel = {
-    CellType.house: 1,
-    CellType.park: 2,
-    CellType.shop: 3,
-    CellType.school: 4,
-    CellType.office: 5,
-    CellType.apartment: 6,
-    CellType.hospital: 7,
-    CellType.factory: 8,
-    CellType.bank: 9,
-    CellType.skyscraper: 10,
+    CellType.residentialZone: 1,
+    CellType.park: 1,
+    CellType.commercialZone: 1,
+    CellType.powerPlant: 1,
+    CellType.waterPump: 1,
+    CellType.industrialZone: 1,
+    CellType.policeStation: 1,
+    CellType.fireStation: 1,
+    CellType.hospital: 1,
+    CellType.school: 1,
+    CellType.powerLine: 1,
+    CellType.waterPipe: 1,
+    // New parks
+    CellType.playground: 1,
+    CellType.fountain: 1,
+    CellType.garden: 1,
+    CellType.statue: 1,
+    // New services
+    CellType.library: 1,
+    CellType.museum: 1,
+    CellType.stadium: 1,
+    CellType.cityHall: 1,
   };
 
-  // Building definitions with isometric colors
+  // Building definitions with isometric colors - SimCity style
   final Map<CellType, Building> buildings = {
-    CellType.house: Building(
-      type: CellType.house,
-      name: 'House',
-      emoji: '🏠',
-      cost: 50,
-      income: 3,
+    // Zones
+    CellType.residentialZone: Building(
+      type: CellType.residentialZone,
+      name: 'Residential',
+      emoji: '🟩',
+      cost: 10,
+      income: 0,
       topColor: Color(0xFF4CAF50),
       sideColor: Color(0xFF2E7D32),
     ),
-    CellType.shop: Building(
-      type: CellType.shop,
-      name: 'Shop',
-      emoji: '🏪',
-      cost: 100,
-      income: 8,
-      topColor: Color(0xFFFF9800),
-      sideColor: Color(0xFFE65100),
-    ),
-    CellType.office: Building(
-      type: CellType.office,
-      name: 'Office',
-      emoji: '🏢',
-      cost: 200,
-      income: 20,
+    CellType.commercialZone: Building(
+      type: CellType.commercialZone,
+      name: 'Commercial',
+      emoji: '🟦',
+      cost: 10,
+      income: 0,
       topColor: Color(0xFF2196F3),
       sideColor: Color(0xFF0D47A1),
     ),
-    CellType.apartment: Building(
-      type: CellType.apartment,
-      name: 'Apartment',
-      emoji: '🏘️',
-      cost: 400,
-      income: 50,
-      topColor: Color(0xFF9C27B0),
-      sideColor: Color(0xFF4A148C),
+    CellType.industrialZone: Building(
+      type: CellType.industrialZone,
+      name: 'Industrial',
+      emoji: '🟨',
+      cost: 10,
+      income: 0,
+      topColor: Color(0xFFFFEB3B),
+      sideColor: Color(0xFFF57F17),
     ),
-    CellType.factory: Building(
-      type: CellType.factory,
-      name: 'Factory',
-      emoji: '🏭',
-      cost: 800,
-      income: 100,
+
+    // Infrastructure
+    CellType.powerPlant: Building(
+      type: CellType.powerPlant,
+      name: 'Power Plant',
+      emoji: '⚡',
+      cost: 500,
+      income: -50, // Maintenance cost
       topColor: Color(0xFF607D8B),
       sideColor: Color(0xFF263238),
     ),
-    CellType.bank: Building(
-      type: CellType.bank,
-      name: 'Bank',
-      emoji: '🏦',
-      cost: 1500,
-      income: 200,
-      topColor: Color(0xFFFFEB3B),
-      sideColor: Color(0xFFF57F17),
+    CellType.powerLine: Building(
+      type: CellType.powerLine,
+      name: 'Power Line',
+      emoji: '⚡',
+      cost: 5,
+      income: -1,
+      topColor: Color(0xFF9E9E9E),
+      sideColor: Color(0xFF616161),
+    ),
+    CellType.waterPump: Building(
+      type: CellType.waterPump,
+      name: 'Water Pump',
+      emoji: '💧',
+      cost: 300,
+      income: -30,
+      topColor: Color(0xFF00BCD4),
+      sideColor: Color(0xFF006064),
+    ),
+    CellType.waterPipe: Building(
+      type: CellType.waterPipe,
+      name: 'Water Pipe',
+      emoji: '💧',
+      cost: 5,
+      income: -1,
+      topColor: Color(0xFF4DD0E1),
+      sideColor: Color(0xFF00838F),
+    ),
+    CellType.powerLineAndWaterPipe: Building(
+      type: CellType.powerLineAndWaterPipe,
+      name: 'Power+Water',
+      emoji: '⚡💧',
+      cost: 0, // No cost, created by crossing
+      income: -2, // Combined maintenance
+      topColor: Color(0xFF9E9E9E),
+      sideColor: Color(0xFF616161),
+    ),
+
+    // Services
+    CellType.policeStation: Building(
+      type: CellType.policeStation,
+      name: 'Police',
+      emoji: '🚓',
+      cost: 400,
+      income: -40,
+      topColor: Color(0xFF1976D2),
+      sideColor: Color(0xFF0D47A1),
+    ),
+    CellType.fireStation: Building(
+      type: CellType.fireStation,
+      name: 'Fire Station',
+      emoji: '🚒',
+      cost: 400,
+      income: -40,
+      topColor: Color(0xFFF44336),
+      sideColor: Color(0xFFB71C1C),
     ),
     CellType.hospital: Building(
       type: CellType.hospital,
       name: 'Hospital',
       emoji: '🏥',
-      cost: 1200,
-      income: 150,
-      topColor: Color(0xFFF44336),
-      sideColor: Color(0xFFB71C1C),
+      cost: 500,
+      income: -50,
+      topColor: Color(0xFFE91E63),
+      sideColor: Color(0xFFC2185B),
     ),
     CellType.school: Building(
       type: CellType.school,
       name: 'School',
       emoji: '🏫',
-      cost: 600,
-      income: 75,
-      topColor: Color(0xFF00BCD4),
-      sideColor: Color(0xFF006064),
+      cost: 300,
+      income: -30,
+      topColor: Color(0xFF9C27B0),
+      sideColor: Color(0xFF7B1FA2),
     ),
+
+    // Developed buildings
+    CellType.residentialLow: Building(
+      type: CellType.residentialLow,
+      name: 'House',
+      emoji: '🏠',
+      cost: 0,
+      income: 5,
+      topColor: Color(0xFF4CAF50),
+      sideColor: Color(0xFF2E7D32),
+    ),
+    CellType.residentialMedium: Building(
+      type: CellType.residentialMedium,
+      name: 'Apartments',
+      emoji: '🏘️',
+      cost: 0,
+      income: 15,
+      topColor: Color(0xFF66BB6A),
+      sideColor: Color(0xFF388E3C),
+    ),
+    CellType.residentialHigh: Building(
+      type: CellType.residentialHigh,
+      name: 'Condos',
+      emoji: '🏙️',
+      cost: 0,
+      income: 30,
+      topColor: Color(0xFF81C784),
+      sideColor: Color(0xFF43A047),
+    ),
+    CellType.commercialLow: Building(
+      type: CellType.commercialLow,
+      name: 'Shop',
+      emoji: '🏪',
+      cost: 0,
+      income: 10,
+      topColor: Color(0xFF2196F3),
+      sideColor: Color(0xFF0D47A1),
+    ),
+    CellType.commercialMedium: Building(
+      type: CellType.commercialMedium,
+      name: 'Office',
+      emoji: '🏢',
+      cost: 0,
+      income: 25,
+      topColor: Color(0xFF42A5F5),
+      sideColor: Color(0xFF1565C0),
+    ),
+    CellType.commercialHigh: Building(
+      type: CellType.commercialHigh,
+      name: 'Skyscraper',
+      emoji: '🏙️',
+      cost: 0,
+      income: 50,
+      topColor: Color(0xFF64B5F6),
+      sideColor: Color(0xFF1976D2),
+    ),
+    CellType.industrialLow: Building(
+      type: CellType.industrialLow,
+      name: 'Warehouse',
+      emoji: '🏭',
+      cost: 0,
+      income: 8,
+      topColor: Color(0xFFFFEB3B),
+      sideColor: Color(0xFFF57F17),
+    ),
+    CellType.industrialMedium: Building(
+      type: CellType.industrialMedium,
+      name: 'Factory',
+      emoji: '🏭',
+      cost: 0,
+      income: 20,
+      topColor: Color(0xFFFDD835),
+      sideColor: Color(0xFFF9A825),
+    ),
+    CellType.industrialHigh: Building(
+      type: CellType.industrialHigh,
+      name: 'Heavy Industry',
+      emoji: '🏭',
+      cost: 0,
+      income: 40,
+      topColor: Color(0xFFFFEE58),
+      sideColor: Color(0xFFFBC02D),
+    ),
+
+    // Special
     CellType.park: Building(
       type: CellType.park,
       name: 'Park',
       emoji: '🌳',
-      cost: 150,
-      income: 10,
+      cost: 50,
+      income: 0,
       topColor: Color(0xFF8BC34A),
       sideColor: Color(0xFF33691E),
     ),
-    CellType.skyscraper: Building(
-      type: CellType.skyscraper,
-      name: 'Skyscraper',
-      emoji: '🏙️',
-      cost: 3000,
-      income: 500,
+    CellType.playground: Building(
+      type: CellType.playground,
+      name: 'Playground',
+      emoji: '🎠',
+      cost: 30,
+      income: 0,
+      topColor: Color(0xFFFFEB3B),
+      sideColor: Color(0xFFF57F17),
+    ),
+    CellType.fountain: Building(
+      type: CellType.fountain,
+      name: 'Fountain',
+      emoji: '⛲',
+      cost: 40,
+      income: 0,
+      topColor: Color(0xFF00BCD4),
+      sideColor: Color(0xFF006064),
+    ),
+    CellType.garden: Building(
+      type: CellType.garden,
+      name: 'Garden',
+      emoji: '🌺',
+      cost: 35,
+      income: 0,
+      topColor: Color(0xFFE91E63),
+      sideColor: Color(0xFFC2185B),
+    ),
+    CellType.statue: Building(
+      type: CellType.statue,
+      name: 'Statue',
+      emoji: '🗿',
+      cost: 60,
+      income: 0,
+      topColor: Color(0xFF9E9E9E),
+      sideColor: Color(0xFF616161),
+    ),
+
+    // Additional Services
+    CellType.library: Building(
+      type: CellType.library,
+      name: 'Library',
+      emoji: '📚',
+      cost: 250,
+      income: -25,
+      topColor: Color(0xFF795548),
+      sideColor: Color(0xFF4E342E),
+    ),
+    CellType.museum: Building(
+      type: CellType.museum,
+      name: 'Museum',
+      emoji: '🏛️',
+      cost: 350,
+      income: -35,
+      topColor: Color(0xFF607D8B),
+      sideColor: Color(0xFF263238),
+    ),
+    CellType.stadium: Building(
+      type: CellType.stadium,
+      name: 'Stadium',
+      emoji: '🏟️',
+      cost: 800,
+      income: -80,
       topColor: Color(0xFF3F51B5),
       sideColor: Color(0xFF1A237E),
+    ),
+    CellType.cityHall: Building(
+      type: CellType.cityHall,
+      name: 'City Hall',
+      emoji: '🏛️',
+      cost: 500,
+      income: -50,
+      topColor: Color(0xFFFFEB3B),
+      sideColor: Color(0xFFF57F17),
     ),
   };
 
@@ -247,20 +539,69 @@ class _CityScreenState extends State<CityScreen> {
   void initState() {
     super.initState();
 
-    // Try to load saved game, otherwise initialize new city
-    loadGame().then((_) {
-      // If no saved game, initialize fresh city
-      if (cityGrid.every((row) => row.every((cell) => cell == CellType.empty))) {
-        initializeCity();
-      }
-    });
-
-    // Initialize building upgrades grid if needed
+    // Initialize all grids
     if (buildingUpgrades.isEmpty) {
       buildingUpgrades = List.generate(gridSize, (row) {
         return List.generate(gridSize, (col) => 0);
       });
     }
+    if (constructionProgress.isEmpty) {
+      constructionProgress = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => 1.0); // Start fully constructed
+      });
+    }
+    if (powerGrid.isEmpty) {
+      powerGrid = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => false);
+      });
+    }
+    if (waterGrid.isEmpty) {
+      waterGrid = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => false);
+      });
+    }
+    if (policeCoverage.isEmpty) {
+      policeCoverage = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => 0);
+      });
+    }
+    if (fireCoverage.isEmpty) {
+      fireCoverage = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => 0);
+      });
+    }
+    if (hospitalCoverage.isEmpty) {
+      hospitalCoverage = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => 0);
+      });
+    }
+    if (schoolCoverage.isEmpty) {
+      schoolCoverage = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => 0);
+      });
+    }
+
+    // Try to load saved game, otherwise initialize new city
+    loadGame().then((_) {
+      // If no saved game, initialize fresh city
+      if (cityGrid.isEmpty || cityGrid.every((row) => row.every((cell) => cell == CellType.empty))) {
+        initializeCity();
+      }
+
+      // Ensure constructionProgress is initialized after loading (for old saves)
+      if (constructionProgress.isEmpty) {
+        setState(() {
+          constructionProgress = List.generate(gridSize, (row) {
+            return List.generate(gridSize, (col) => 1.0); // All existing buildings fully constructed
+          });
+        });
+      }
+
+      // Update power and water grids after loading
+      updatePowerGrid();
+      updateWaterGrid();
+      updateServiceCoverage();
+    });
 
     // Start vehicle spawning
     vehicleSpawnTimer = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -282,9 +623,56 @@ class _CityScreenState extends State<CityScreen> {
       animateFloatingTexts();
     });
 
+    // Zone growth timer - zones develop into buildings AND buildings auto-upgrade
+    zoneGrowthTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      processZoneGrowth();
+      processBuildingEvolution();
+    });
+
     // Auto-save every 10 seconds
     Timer.periodic(const Duration(seconds: 10), (_) {
       saveGame();
+    });
+
+    // Game clock timer - updates every second
+    gameClockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (gameSpeed != GameSpeed.paused) {
+        setState(() {
+          elapsedSeconds++;
+          // Increment cycle every 10 seconds (like SimCity months)
+          if (elapsedSeconds % 10 == 0) {
+            gameCycle++;
+            // Random events happen every cycle
+            triggerRandomEvent();
+          }
+        });
+      }
+    });
+
+    // Construction animation timer - animates buildings growing
+    constructionAnimationTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (gameSpeed != GameSpeed.paused) {
+        setState(() {
+          for (int row = 0; row < gridSize; row++) {
+            for (int col = 0; col < gridSize; col++) {
+              if (constructionProgress[row][col] < 1.0) {
+                // Buildings take 2 seconds to construct (40 ticks at 50ms)
+                constructionProgress[row][col] += 0.025;
+                if (constructionProgress[row][col] > 1.0) {
+                  constructionProgress[row][col] = 1.0;
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+
+    // Achievement notification timer - clears notifications after 3 seconds
+    achievementNotificationTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      setState(() {
+        achievementNotifications.removeWhere((notif) => false); // Will manage this better
+      });
     });
   }
 
@@ -299,6 +687,21 @@ class _CityScreenState extends State<CityScreen> {
         return CellType.empty;
       });
     });
+
+    // Add initial infrastructure to save setup time
+    // Power plants strategically placed for full coverage
+    // With 8-square radius, 2 power plants in corners provide full coverage
+    cityGrid[1][1] = CellType.powerPlant;
+    cityGrid[gridSize - 2][gridSize - 2] = CellType.powerPlant;
+
+    // Water pumps in other corners for full coverage
+    cityGrid[1][gridSize - 2] = CellType.waterPump;
+    cityGrid[gridSize - 2][1] = CellType.waterPump;
+
+    // Update power and water grids to reflect initial infrastructure
+    // No lines needed - power and water radiate automatically!
+    updatePowerGrid();
+    updateWaterGrid();
   }
 
   @override
@@ -307,10 +710,487 @@ class _CityScreenState extends State<CityScreen> {
     idleIncomeTimer?.cancel();
     vehicleAnimationTimer?.cancel();
     floatingTextTimer?.cancel();
+    zoneGrowthTimer?.cancel();
     super.dispose();
   }
 
+  // SIMCITY CORE SYSTEMS
+
+  // Power grid propagation - radiates 8 squares from power plants
+  void updatePowerGrid() {
+    // Reset power grid
+    powerGrid = List.generate(gridSize, (row) {
+      return List.generate(gridSize, (col) => false);
+    });
+
+    // Find all power plants and apply coverage radius
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        if (cityGrid[row][col] == CellType.powerPlant) {
+          // Apply power coverage in 8-square radius
+          _applyPowerCoverage(row, col, 8);
+        }
+      }
+    }
+  }
+
+  void _applyPowerCoverage(int centerRow, int centerCol, int radius) {
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        // Calculate distance from power plant
+        double distance = sqrt(pow(row - centerRow, 2) + pow(col - centerCol, 2));
+        if (distance <= radius) {
+          powerGrid[row][col] = true;
+        }
+      }
+    }
+  }
+
+  // Water grid propagation - radiates 8 squares from water pumps
+  void updateWaterGrid() {
+    // Reset water grid
+    waterGrid = List.generate(gridSize, (row) {
+      return List.generate(gridSize, (col) => false);
+    });
+
+    // Find all water pumps and apply coverage radius
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        if (cityGrid[row][col] == CellType.waterPump) {
+          // Apply water coverage in 8-square radius
+          _applyWaterCoverage(row, col, 8);
+        }
+      }
+    }
+  }
+
+  void _applyWaterCoverage(int centerRow, int centerCol, int radius) {
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        // Calculate distance from water pump
+        double distance = sqrt(pow(row - centerRow, 2) + pow(col - centerCol, 2));
+        if (distance <= radius) {
+          waterGrid[row][col] = true;
+        }
+      }
+    }
+  }
+
+  // Service coverage calculation
+  void updateServiceCoverage() {
+    // Reset coverage
+    policeCoverage = List.generate(gridSize, (row) {
+      return List.generate(gridSize, (col) => 0);
+    });
+    fireCoverage = List.generate(gridSize, (row) {
+      return List.generate(gridSize, (col) => 0);
+    });
+    hospitalCoverage = List.generate(gridSize, (row) {
+      return List.generate(gridSize, (col) => 0);
+    });
+    schoolCoverage = List.generate(gridSize, (row) {
+      return List.generate(gridSize, (col) => 0);
+    });
+
+    // Apply coverage for all service buildings (larger radius like SimCity)
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        if (cityGrid[row][col] == CellType.policeStation) {
+          _applyCoverage(policeCoverage, row, col, 8);
+        }
+        if (cityGrid[row][col] == CellType.fireStation) {
+          _applyCoverage(fireCoverage, row, col, 8);
+        }
+        if (cityGrid[row][col] == CellType.hospital) {
+          _applyCoverage(hospitalCoverage, row, col, 9);
+        }
+        if (cityGrid[row][col] == CellType.school) {
+          _applyCoverage(schoolCoverage, row, col, 8);
+        }
+      }
+    }
+  }
+
+  void _applyCoverage(List<List<int>> coverageGrid, int centerRow, int centerCol, int radius) {
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        double distance = sqrt(pow(row - centerRow, 2) + pow(col - centerCol, 2));
+        if (distance <= radius) {
+          int coverage = ((1 - distance / radius) * 10).round();
+          coverageGrid[row][col] = max(coverageGrid[row][col], coverage);
+        }
+      }
+    }
+  }
+
+  // Building evolution - buildings automatically upgrade over time
+  void processBuildingEvolution() {
+    if (gameSpeed == GameSpeed.paused) return; // Don't evolve buildings when paused
+
+    final random = Random();
+
+    // Adjust evolution rate based on game speed
+    int attempts = 2; // Medium speed default
+    if (gameSpeed == GameSpeed.slow) attempts = 1;
+    if (gameSpeed == GameSpeed.fast) attempts = 4;
+
+    // Try to evolve a few buildings each tick
+    for (int attempt = 0; attempt < attempts; attempt++) {
+      int row = random.nextInt(gridSize);
+      int col = random.nextInt(gridSize);
+
+      final cellType = cityGrid[row][col];
+
+      // Check if building can evolve to next tier
+      CellType? nextTier;
+      int populationRequired = 0;
+
+      // Residential evolution: house → apartment → condo
+      if (cellType == CellType.residentialLow && population >= 30) {
+        nextTier = CellType.residentialMedium;
+      } else if (cellType == CellType.residentialMedium && population >= 100) {
+        nextTier = CellType.residentialHigh;
+      }
+      // Commercial evolution: shop → office → skyscraper
+      else if (cellType == CellType.commercialLow && population >= 40) {
+        nextTier = CellType.commercialMedium;
+      } else if (cellType == CellType.commercialMedium && population >= 120) {
+        nextTier = CellType.commercialHigh;
+      }
+      // Industrial evolution: warehouse → factory → heavy industry
+      else if (cellType == CellType.industrialLow && population >= 35) {
+        nextTier = CellType.industrialMedium;
+      } else if (cellType == CellType.industrialMedium && population >= 110) {
+        nextTier = CellType.industrialHigh;
+      }
+
+      // Evolve the building if conditions met
+      if (nextTier != null) {
+        // Need good services to upgrade
+        int services = policeCoverage[row][col] + fireCoverage[row][col] +
+                      hospitalCoverage[row][col] + schoolCoverage[row][col];
+        if (services >= 5 && powerGrid[row][col] && waterGrid[row][col]) {
+          setState(() {
+            cityGrid[row][col] = nextTier!;
+            population += 5; // Population boost from denser building
+            addFloatingText('⬆️', row.toDouble(), col.toDouble());
+          });
+        }
+      }
+    }
+  }
+
+  // Zone growth - zones develop into buildings based on conditions
+  void processZoneGrowth() {
+    if (gameSpeed == GameSpeed.paused) return; // Don't grow zones when paused
+
+    final random = Random();
+
+    // Adjust growth rate based on game speed
+    int attempts = 3; // Medium speed default
+    if (gameSpeed == GameSpeed.slow) attempts = 1;
+    if (gameSpeed == GameSpeed.fast) attempts = 6;
+
+    // Try to grow a few zones each tick
+    for (int attempt = 0; attempt < attempts; attempt++) {
+      int row = random.nextInt(gridSize);
+      int col = random.nextInt(gridSize);
+
+      final cellType = cityGrid[row][col];
+
+      // Check if it's a zone that can grow
+      if (cellType == CellType.residentialZone ||
+          cellType == CellType.commercialZone ||
+          cellType == CellType.industrialZone) {
+
+        // Check growth requirements
+        if (!_canZoneGrow(row, col, cellType)) continue;
+
+        // Grow the zone
+        setState(() {
+          if (cellType == CellType.residentialZone) {
+            cityGrid[row][col] = _getResidentialBuilding();
+            constructionProgress[row][col] = 0.0; // Start construction animation
+            population += 10;
+            residentialDemand -= 10;
+            checkAchievements();
+          } else if (cellType == CellType.commercialZone) {
+            cityGrid[row][col] = _getCommercialBuilding();
+            constructionProgress[row][col] = 0.0; // Start construction animation
+            population += 5;
+            commercialDemand -= 10;
+            checkAchievements();
+          } else if (cellType == CellType.industrialZone) {
+            cityGrid[row][col] = _getIndustrialBuilding();
+            constructionProgress[row][col] = 0.0; // Start construction animation
+            population += 3;
+            industrialDemand -= 10;
+            checkAchievements();
+          }
+
+          addFloatingText('🏗️', row.toDouble(), col.toDouble());
+          updatePowerGrid();
+          updateWaterGrid();
+        });
+      }
+    }
+
+    // Update RCI demand based on city composition
+    _updateRCIDemand();
+  }
+
+  bool _canZoneGrow(int row, int col, CellType zoneType) {
+    // Must have power and water
+    if (!powerGrid[row][col]) {
+      print('Zone at ($row,$col) cannot grow: NO POWER');
+      return false;
+    }
+    if (!waterGrid[row][col]) {
+      print('Zone at ($row,$col) cannot grow: NO WATER');
+      return false;
+    }
+
+    // Must be near a road (or infrastructure placed on roads)
+    bool nearRoad = false;
+    for (int dr = -1; dr <= 1; dr++) {
+      for (int dc = -1; dc <= 1; dc++) {
+        int r = row + dr;
+        int c = col + dc;
+        if (r >= 0 && r < gridSize && c >= 0 && c < gridSize) {
+          final adjCell = cityGrid[r][c];
+          // Roads include: streets, power lines, water pipes, and combined infrastructure
+          if (adjCell == CellType.street ||
+              adjCell == CellType.powerLine ||
+              adjCell == CellType.waterPipe ||
+              adjCell == CellType.powerLineAndWaterPipe) {
+            nearRoad = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!nearRoad) {
+      print('Zone at ($row,$col) cannot grow: NO NEARBY ROAD');
+      return false;
+    }
+
+    // Check demand
+    if (zoneType == CellType.residentialZone && residentialDemand <= 0) {
+      print('Zone at ($row,$col) cannot grow: NO RESIDENTIAL DEMAND');
+      return false;
+    }
+    if (zoneType == CellType.commercialZone && commercialDemand <= 0) {
+      print('Zone at ($row,$col) cannot grow: NO COMMERCIAL DEMAND');
+      return false;
+    }
+    if (zoneType == CellType.industrialZone && industrialDemand <= 0) {
+      print('Zone at ($row,$col) cannot grow: NO INDUSTRIAL DEMAND');
+      return false;
+    }
+
+    return true;
+  }
+
+  CellType _getResidentialBuilding() {
+    // Simple for now - could be based on land value, density, etc.
+    if (population < 50) return CellType.residentialLow;
+    if (population < 150) return CellType.residentialMedium;
+    return CellType.residentialHigh;
+  }
+
+  CellType _getCommercialBuilding() {
+    if (population < 50) return CellType.commercialLow;
+    if (population < 150) return CellType.commercialMedium;
+    return CellType.commercialHigh;
+  }
+
+  CellType _getIndustrialBuilding() {
+    if (population < 50) return CellType.industrialLow;
+    if (population < 150) return CellType.industrialMedium;
+    return CellType.industrialHigh;
+  }
+
+  void _updateRCIDemand() {
+    // Count different building types
+    int residential = 0;
+    int commercial = 0;
+    int industrial = 0;
+
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        final cell = cityGrid[row][col];
+        if (cell == CellType.residentialLow ||
+            cell == CellType.residentialMedium ||
+            cell == CellType.residentialHigh) {
+          residential++;
+        } else if (cell == CellType.commercialLow ||
+                   cell == CellType.commercialMedium ||
+                   cell == CellType.commercialHigh) {
+          commercial++;
+        } else if (cell == CellType.industrialLow ||
+                   cell == CellType.industrialMedium ||
+                   cell == CellType.industrialHigh) {
+          industrial++;
+        }
+      }
+    }
+
+    // SimCity-style demand calculation (rebalanced for better gameplay)
+    // Residential demand: More jobs = more demand, more housing = less demand
+    residentialDemand = ((commercial + industrial) * 3.0 - residential * 2.0).clamp(-100, 100);
+
+    // Commercial demand: More residents = more demand, more shops = less demand
+    commercialDemand = (residential * 2.0 - commercial * 3.0).clamp(-100, 100);
+
+    // Industrial demand: More commercial = more demand (supply chain), more factories = less demand
+    industrialDemand = (commercial * 2.0 - industrial * 3.0).clamp(-100, 100);
+  }
+
+  // ACHIEVEMENT SYSTEM
+  void checkAchievements() {
+    // First City - place first building
+    if (population >= 10 && !unlockedAchievements.contains('first_city')) {
+      unlockAchievement('first_city', '🏘️ First City!', 'You built your first residential building!');
+    }
+
+    // Small Town - reach 50 population
+    if (population >= 50 && !unlockedAchievements.contains('small_town')) {
+      unlockAchievement('small_town', '🏘️ Small Town', 'Population reached 50!');
+    }
+
+    // Growing City - reach 100 population
+    if (population >= 100 && !unlockedAchievements.contains('growing_city')) {
+      unlockAchievement('growing_city', '🏙️ Growing City', 'Population reached 100!');
+    }
+
+    // Metropolis - reach 200 population
+    if (population >= 200 && !unlockedAchievements.contains('metropolis')) {
+      unlockAchievement('metropolis', '🌆 Metropolis!', 'Population reached 200!');
+    }
+
+    // Green City - build 10 parks
+    int parkCount = 0;
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        final cell = cityGrid[row][col];
+        if (cell == CellType.park || cell == CellType.playground ||
+            cell == CellType.fountain || cell == CellType.garden || cell == CellType.statue) {
+          parkCount++;
+        }
+      }
+    }
+    if (parkCount >= 10 && !unlockedAchievements.contains('green_city')) {
+      unlockAchievement('green_city', '🌳 Green City', 'Built 10 parks!');
+    }
+
+    // Wealthy - reach 10,000 coins
+    if (coins >= 10000 && !unlockedAchievements.contains('wealthy')) {
+      unlockAchievement('wealthy', '💰 Wealthy!', 'Reached 10,000 coins!');
+    }
+
+    // Tycoon - reach 50,000 coins
+    if (coins >= 50000 && !unlockedAchievements.contains('tycoon')) {
+      unlockAchievement('tycoon', '💎 Tycoon!', 'Reached 50,000 coins!');
+    }
+  }
+
+  void unlockAchievement(String id, String title, String description) {
+    unlockedAchievements.add(id);
+    achievementNotifications.add('$title\n$description');
+
+    // Award bonus for achievements
+    coins += 500;
+
+    // Remove notification after 3 seconds
+    Future.delayed(Duration(seconds: 3), () {
+      setState(() {
+        achievementNotifications.removeWhere((n) => n == '$title\n$description');
+      });
+    });
+  }
+
+  // RANDOM EVENTS SYSTEM
+  void triggerRandomEvent() {
+    final random = Random();
+
+    // 30% chance of event per cycle
+    if (random.nextDouble() > 0.3) return;
+
+    // List of possible events
+    List<Map<String, dynamic>> events = [
+      {
+        'name': '🎉 City Festival',
+        'description': 'Tourism boom!',
+        'effect': () {
+          coins += 1000;
+          addFloatingText('+\$1000', gridSize / 2, gridSize / 2);
+        },
+      },
+      {
+        'name': '💼 Business Investment',
+        'description': 'New investors!',
+        'effect': () {
+          coins += 1500;
+          addFloatingText('+\$1500', gridSize / 2, gridSize / 2);
+        },
+      },
+      {
+        'name': '📈 Economic Boom',
+        'description': 'Productivity up!',
+        'effect': () {
+          coins += 2000;
+          population += 5;
+          addFloatingText('📈 Boom!', gridSize / 2, gridSize / 2);
+        },
+      },
+      {
+        'name': '🌧️ Heavy Rain',
+        'description': 'Minor damage',
+        'effect': () {
+          coins -= 500;
+          addFloatingText('-\$500', gridSize / 2, gridSize / 2);
+        },
+      },
+      {
+        'name': '🚧 Infrastructure Repair',
+        'description': 'Maintenance costs',
+        'effect': () {
+          coins -= 800;
+          addFloatingText('-\$800', gridSize / 2, gridSize / 2);
+        },
+      },
+      {
+        'name': '👥 Population Surge',
+        'description': 'New residents!',
+        'effect': () {
+          population += 10;
+          addFloatingText('+10 👥', gridSize / 2, gridSize / 2);
+        },
+      },
+    ];
+
+    // Pick random event
+    final event = events[random.nextInt(events.length)];
+
+    // Show event notification
+    achievementNotifications.add('${event['name']}\n${event['description']}');
+
+    // Apply event effect
+    setState(() {
+      event['effect']();
+    });
+
+    // Remove notification after 3 seconds
+    Future.delayed(Duration(seconds: 3), () {
+      setState(() {
+        achievementNotifications.removeWhere((n) => n == '${event['name']}\n${event['description']}');
+      });
+    });
+  }
+
   void spawnVehicle() {
+    if (gameSpeed == GameSpeed.paused) return; // Don't spawn vehicles when paused
+
     final random = Random();
 
     // Find all street cells
@@ -359,6 +1239,8 @@ class _CityScreenState extends State<CityScreen> {
   }
 
   void animateVehicles() {
+    if (gameSpeed == GameSpeed.paused) return; // Don't animate vehicles when paused
+
     setState(() {
       List<Vehicle> vehiclesToRemove = [];
 
@@ -446,59 +1328,43 @@ class _CityScreenState extends State<CityScreen> {
   }
 
   void generateIdleIncome() {
-    int income = 0;
+    if (gameSpeed == GameSpeed.paused) return; // Don't generate income/expenses when paused
 
-    // Bonus-giving building types
-    final bonusBuildings = [
-      CellType.school,
-      CellType.hospital,
-      CellType.skyscraper,
-    ];
+    int income = 0;
+    int expenses = 0;
 
     for (int row = 0; row < gridSize; row++) {
       for (int col = 0; col < gridSize; col++) {
         final cell = cityGrid[row][col];
-        if (cell != CellType.empty && cell != CellType.street) {
-          // Use upgraded income
-          int baseIncome = getBuildingIncome(cell, row, col);
-          double multiplier = 1.0;
+        final building = buildings[cell];
 
-          // Check adjacent cells for bonus buildings
-          int bonusCount = 0;
-          final adjacentPositions = [
-            [row - 1, col],     // top
-            [row + 1, col],     // bottom
-            [row, col - 1],     // left
-            [row, col + 1],     // right
-            [row - 1, col - 1], // top-left
-            [row - 1, col + 1], // top-right
-            [row + 1, col - 1], // bottom-left
-            [row + 1, col + 1], // bottom-right
-          ];
+        if (building != null) {
+          int buildingIncome = building.income;
 
-          for (var pos in adjacentPositions) {
-            int r = pos[0];
-            int c = pos[1];
-            if (r >= 0 && r < gridSize && c >= 0 && c < gridSize) {
-              if (bonusBuildings.contains(cityGrid[r][c])) {
-                bonusCount++;
-              }
-            }
+          // Only developed buildings generate tax income (not zones or infrastructure)
+          if (buildingIncome > 0) {
+            // Buildings with power and water generate more income
+            int multiplier = 1;
+            if (powerGrid[row][col]) multiplier++;
+            if (waterGrid[row][col]) multiplier++;
+
+            income += buildingIncome * multiplier;
+          } else if (buildingIncome < 0) {
+            // Negative income = maintenance cost
+            expenses += buildingIncome.abs();
           }
-
-          // Each adjacent bonus building adds 20% income bonus
-          if (bonusCount > 0) {
-            multiplier = 1.0 + (bonusCount * 0.2);
-          }
-
-          income += (baseIncome * multiplier).round();
         }
       }
     }
 
-    if (income > 0) {
+    // Apply net income
+    int netIncome = income - expenses;
+
+    if (netIncome != 0) {
       setState(() {
-        coins += income;
+        coins += netIncome;
+        monthlyIncome = income;
+        monthlyExpenses = expenses;
       });
     }
   }
@@ -598,40 +1464,168 @@ class _CityScreenState extends State<CityScreen> {
     }
   }
 
+  // Start a new game
+  Future<void> newGame() async {
+    try {
+      // Clear saved game data
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+
+      // Reset all state to initial values
+      setState(() {
+        coins = 5000;
+        population = 0;
+        playerLevel = 1;
+        experience = 0;
+        experienceToNextLevel = 300;
+        vehicles.clear();
+        floatingTexts.clear();
+        selectedBuilding = null;
+        bulldozerMode = false;
+        infoMode = false;
+        undergroundView = false;
+        gameSpeed = GameSpeed.medium;
+        expandedCategory = null;
+        residentialDemand = 50.0;
+        commercialDemand = 30.0;
+        industrialDemand = 40.0;
+        monthlyIncome = 0;
+        monthlyExpenses = 0;
+        elapsedSeconds = 0;
+        gameCycle = 0;
+        gameStartTime = DateTime.now();
+
+        // Re-initialize city grid
+        initializeCity();
+
+        // Re-initialize all grids
+        buildingUpgrades = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => 0);
+        });
+        constructionProgress = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => 1.0);
+        });
+        powerGrid = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => false);
+        });
+        waterGrid = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => false);
+        });
+        policeCoverage = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => 0);
+        });
+        fireCoverage = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => 0);
+        });
+        hospitalCoverage = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => 0);
+        });
+        schoolCoverage = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => 0);
+        });
+      });
+
+      print('New game started!');
+    } catch (e) {
+      print('Error starting new game: $e');
+    }
+  }
+
   void placeBuilding(int row, int col) {
+    print('placeBuilding called: row=$row, col=$col, selectedBuilding=$selectedBuilding, cellType=${cityGrid[row][col]}');
+
+    // Info mode - show building info
+    if (infoMode) {
+      showBuildingInfo(context, row, col);
+      return;
+    }
+
     // Bulldozer mode - demolish building
     if (bulldozerMode) {
       demolishBuilding(row, col);
       return;
     }
 
-    // Check if clicking on existing building to upgrade
-    if (cityGrid[row][col] != CellType.empty && cityGrid[row][col] != CellType.street) {
-      upgradeBuilding(row, col);
-      return;
-    }
+    // In SimCity, buildings auto-upgrade, not manual upgrades
+    // So we skip this check
 
-    // Place new building
-    if (selectedBuilding != null && cityGrid[row][col] == CellType.empty) {
+    // Place new building/zone/infrastructure
+    if (selectedBuilding != null) {
+      final currentCell = cityGrid[row][col];
+
+      // Check if placement is allowed
+      bool canPlace = false;
+      bool convertToCombined = false;
+
+      // Allow on empty cells
+      if (currentCell == CellType.empty) {
+        canPlace = true;
+      }
+      // Allow power/water infrastructure on streets (SimCity style!)
+      else if (currentCell == CellType.street) {
+        if (selectedBuilding == CellType.powerLine ||
+            selectedBuilding == CellType.waterPipe) {
+          canPlace = true;
+        }
+      }
+      // Allow crossing power and water lines!
+      else if (currentCell == CellType.powerLine && selectedBuilding == CellType.waterPipe) {
+        canPlace = true;
+        convertToCombined = true;
+      }
+      else if (currentCell == CellType.waterPipe && selectedBuilding == CellType.powerLine) {
+        canPlace = true;
+        convertToCombined = true;
+      }
+
+      if (!canPlace) {
+        print('Cannot place here!');
+        return;
+      }
+
       final building = buildings[selectedBuilding]!;
 
       // Check if unlocked
       if (!isBuildingUnlocked(selectedBuilding!)) {
+        print('Building not unlocked!');
         return;
       }
 
       if (coins >= building.cost) {
+        print('Placing building! Cost: ${building.cost}, Coins: $coins');
         setState(() {
           coins -= building.cost;
-          cityGrid[row][col] = selectedBuilding!;
-          population += 15;
-          selectedBuilding = null;
 
-          // Gain XP for placing building
-          gainExperience(10);
+          // If crossing infrastructure, convert to combined type
+          if (convertToCombined) {
+            cityGrid[row][col] = CellType.powerLineAndWaterPipe;
+          } else {
+            cityGrid[row][col] = selectedBuilding!;
+          }
+
+          // Zones don't add population directly (buildings that grow from them do)
+          final isZone = selectedBuilding == CellType.residentialZone ||
+                        selectedBuilding == CellType.commercialZone ||
+                        selectedBuilding == CellType.industrialZone;
+
+          if (!isZone) {
+            population += 5; // Small population boost for infrastructure buildings
+          }
+
+          // Gain XP for placing
+          gainExperience(5);
+
+          // Update grids after placing infrastructure
+          updatePowerGrid();
+          updateWaterGrid();
+          updateServiceCoverage();
         });
         saveGame(); // Save after placing building
+      } else {
+        print('Not enough coins! Need: ${building.cost}, Have: $coins');
       }
+    } else {
+      print('Cannot place: selectedBuilding=$selectedBuilding, cellEmpty=${cityGrid[row][col] == CellType.empty}');
     }
   }
 
@@ -652,6 +1646,121 @@ class _CityScreenState extends State<CityScreen> {
       addFloatingText('💥', row.toDouble(), col.toDouble());
     });
     saveGame(); // Save after demolishing
+  }
+
+  void showBuildingInfo(BuildContext context, int row, int col) {
+    final cellType = cityGrid[row][col];
+
+    // Get building name and details
+    String title = '';
+    String emoji = '';
+    List<String> details = [];
+
+    if (cellType == CellType.empty) {
+      title = 'Empty Land';
+      emoji = '🟩';
+      details.add('This land is empty and ready for development.');
+    } else if (cellType == CellType.street) {
+      title = 'Street';
+      emoji = '🛣️';
+      details.add('Roads allow zones to develop and vehicles to travel.');
+    } else {
+      final building = buildings[cellType];
+      if (building != null) {
+        title = building.name;
+        emoji = building.emoji;
+
+        // Income/expense info
+        if (building.income > 0) {
+          int baseIncome = building.income;
+          int multiplier = 1;
+          if (powerGrid[row][col]) multiplier++;
+          if (waterGrid[row][col]) multiplier++;
+          int actualIncome = baseIncome * multiplier;
+
+          details.add('💰 Income: \$${actualIncome}/cycle (base: \$${baseIncome})');
+          if (multiplier > 1) {
+            details.add('   ${powerGrid[row][col] ? "⚡ Powered" : ""} ${waterGrid[row][col] ? "💧 Watered" : ""}');
+          }
+        } else if (building.income < 0) {
+          details.add('💸 Maintenance: \$${building.income.abs()}/cycle');
+        } else {
+          details.add('💰 Income: \$0/cycle');
+        }
+
+        // Cost info
+        details.add('🏗️ Build cost: \$${building.cost}');
+
+        // Upgrade level
+        final upgradeLevel = buildingUpgrades[row][col];
+        if (upgradeLevel > 0) {
+          details.add('⭐ Upgrade level: $upgradeLevel');
+        }
+
+        // Utilities
+        details.add('');
+        details.add('Utilities:');
+        details.add('  ${powerGrid[row][col] ? "✅" : "❌"} Power');
+        details.add('  ${waterGrid[row][col] ? "✅" : "❌"} Water');
+
+        // Services
+        if (policeCoverage[row][col] > 0 || fireCoverage[row][col] > 0 ||
+            hospitalCoverage[row][col] > 0 || schoolCoverage[row][col] > 0) {
+          details.add('');
+          details.add('Service Coverage:');
+          if (policeCoverage[row][col] > 0) {
+            details.add('  🚓 Police: ${policeCoverage[row][col]}/10');
+          }
+          if (fireCoverage[row][col] > 0) {
+            details.add('  🚒 Fire: ${fireCoverage[row][col]}/10');
+          }
+          if (hospitalCoverage[row][col] > 0) {
+            details.add('  🏥 Hospital: ${hospitalCoverage[row][col]}/10');
+          }
+          if (schoolCoverage[row][col] > 0) {
+            details.add('  🏫 School: ${schoolCoverage[row][col]}/10');
+          }
+        }
+      }
+    }
+
+    // Show dialog
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Text(emoji, style: TextStyle(fontSize: 24)),
+              SizedBox(width: 8),
+              Expanded(child: Text(title)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Location: ($row, $col)'),
+                SizedBox(height: 8),
+                ...details.map((detail) => Padding(
+                  padding: EdgeInsets.only(bottom: 4),
+                  child: Text(detail),
+                )).toList(),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void upgradeBuilding(int row, int col) {
@@ -734,15 +1843,130 @@ class _CityScreenState extends State<CityScreen> {
     });
   }
 
+  void _showBudgetDialog(BuildContext context) {
+    // Calculate detailed budget breakdown
+    Map<String, int> incomeBreakdown = {};
+    Map<String, int> expenseBreakdown = {};
+
+    for (int row = 0; row < gridSize; row++) {
+      for (int col = 0; col < gridSize; col++) {
+        final cell = cityGrid[row][col];
+        final building = buildings[cell];
+
+        if (building != null) {
+          int buildingIncome = building.income;
+
+          // Only developed buildings generate tax income (not zones or infrastructure)
+          if (buildingIncome > 0) {
+            // Buildings with power and water generate more income
+            int multiplier = 1;
+            if (powerGrid[row][col]) multiplier++;
+            if (waterGrid[row][col]) multiplier++;
+
+            int income = buildingIncome * multiplier;
+            incomeBreakdown[building.name] = (incomeBreakdown[building.name] ?? 0) + income;
+          } else if (buildingIncome < 0) {
+            // Negative income = maintenance cost
+            int expense = buildingIncome.abs();
+            expenseBreakdown[building.name] = (expenseBreakdown[building.name] ?? 0) + expense;
+          }
+        }
+      }
+    }
+
+    int totalIncome = incomeBreakdown.values.fold(0, (sum, val) => sum + val);
+    int totalExpenses = expenseBreakdown.values.fold(0, (sum, val) => sum + val);
+    int netIncome = totalIncome - totalExpenses;
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Text('📊 Budget Report'),
+              Spacer(),
+              Text(
+                netIncome >= 0 ? '+\$$netIncome' : '-\$$netIncome.abs()',
+                style: TextStyle(
+                  color: netIncome >= 0 ? Colors.green : Colors.red,
+                  fontSize: 18,
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Income section
+                Text(
+                  '💰 Income: \$$totalIncome',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+                SizedBox(height: 8),
+                ...incomeBreakdown.entries.map((entry) {
+                  return Padding(
+                    padding: EdgeInsets.only(left: 16, bottom: 4),
+                    child: Text('${entry.key}: +\$${entry.value}'),
+                  );
+                }).toList(),
+                SizedBox(height: 16),
+                // Expenses section
+                Text(
+                  '💸 Expenses: \$$totalExpenses',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red,
+                  ),
+                ),
+                SizedBox(height: 8),
+                ...expenseBreakdown.entries.map((entry) {
+                  return Padding(
+                    padding: EdgeInsets.only(left: 16, bottom: 4),
+                    child: Text('${entry.key}: -\$${entry.value}'),
+                  );
+                }).toList(),
+                if (expenseBreakdown.isEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(left: 16),
+                    child: Text('No expenses'),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Color(0xFF87CEEB),
       body: SafeArea(
-        child: Column(
+        child: Row(
           children: [
-            // Header with stats
-            Container(
+            // Main game area (header + city grid)
+            Expanded(
+              child: Column(
+                children: [
+                  // Header with stats
+                  Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -761,9 +1985,133 @@ class _CityScreenState extends State<CityScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      _buildStatChip('💰 $coins', Color(0xFFFFC107)),
-                      _buildStatChip('⭐ Lv $playerLevel', Color(0xFFE91E63)),
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            coins += 1000;
+                          });
+                        },
+                        child: _buildStatChip('💰 \$$coins', Color(0xFFFFC107)),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          _showBudgetDialog(context);
+                        },
+                        child: _buildStatChip('📊 +\$$monthlyIncome/-\$$monthlyExpenses', monthlyIncome >= monthlyExpenses ? Color(0xFF4CAF50) : Color(0xFFF44336)),
+                      ),
                       _buildStatChip('👥 $population', Color(0xFF4CAF50)),
+                      _buildStatChip('🕐 ${_formatTime(elapsedSeconds)} | Month $gameCycle', Color(0xFF9C27B0)),
+                      // Speed control buttons
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildSpeedButton('⏸', GameSpeed.paused, Color(0xFFFF9800)),
+                          SizedBox(width: 4),
+                          _buildSpeedButton('▶', GameSpeed.slow, Color(0xFF4CAF50)),
+                          SizedBox(width: 4),
+                          _buildSpeedButton('▶▶', GameSpeed.medium, Color(0xFF2196F3)),
+                          SizedBox(width: 4),
+                          _buildSpeedButton('▶▶▶', GameSpeed.fast, Color(0xFF9C27B0)),
+                        ],
+                      ),
+                      // Underground view toggle button
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            undergroundView = !undergroundView;
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: undergroundView ? Color(0xFF00BCD4) : Color(0xFF616161),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.black, width: 2),
+                          ),
+                          child: Text(
+                            undergroundView ? '🔼 Surface' : '🔽 Underground',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Save button
+                      GestureDetector(
+                        onTap: () {
+                          saveGame();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Game saved!'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Color(0xFF4CAF50),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.black, width: 2),
+                          ),
+                          child: Text(
+                            '💾 Save',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // New Game button
+                      GestureDetector(
+                        onTap: () {
+                          // Show confirmation dialog
+                          showDialog(
+                            context: context,
+                            builder: (BuildContext context) {
+                              return AlertDialog(
+                                title: Text('Start New Game?'),
+                                content: Text('This will reset all progress and start a new city. Are you sure?'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.of(context).pop();
+                                    },
+                                    child: Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.of(context).pop();
+                                      newGame();
+                                    },
+                                    child: Text('New Game', style: TextStyle(color: Colors.red)),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Color(0xFFFF5722),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.black, width: 2),
+                          ),
+                          child: Text(
+                            '🆕 New Game',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   SizedBox(height: 6),
@@ -786,6 +2134,18 @@ class _CityScreenState extends State<CityScreen> {
                         ),
                       ),
                     ),
+                  ),
+                  SizedBox(height: 8),
+                  // RCI Demand Bars (SimCity style) - Grouped together
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildDemandBar('R', residentialDemand, Color(0xFF4CAF50)),
+                      SizedBox(width: 2),
+                      _buildDemandBar('C', commercialDemand, Color(0xFF2196F3)),
+                      SizedBox(width: 2),
+                      _buildDemandBar('I', industrialDemand, Color(0xFFFFEB3B)),
+                    ],
                   ),
                 ],
               ),
@@ -910,201 +2270,75 @@ class _CityScreenState extends State<CityScreen> {
                       ),
                     );
                   }).toList(),
+
+                  // Achievement/Event notifications - top center overlay
+                  ...achievementNotifications.asMap().entries.map((entry) {
+                    int index = entry.key;
+                    String notification = entry.value;
+                    return Positioned(
+                      top: 80.0 + (index * 100), // Stack multiple notifications
+                      left: MediaQuery.of(context).size.width / 2 - 150,
+                      child: Container(
+                        width: 300,
+                        padding: EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFF4CAF50), Color(0xFF2196F3)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.5),
+                              offset: Offset(0, 4),
+                              blurRadius: 8,
+                            )
+                          ],
+                        ),
+                        child: Text(
+                          notification,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            shadows: [
+                              Shadow(
+                                color: Colors.black,
+                                offset: Offset(2, 2),
+                                blurRadius: 4,
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ],
+              ),
+            ),
                 ],
               ),
             ),
 
-            // Building selection menu
+            // Building selection menu - CATEGORIZED (Now on the right side)
             Container(
-              height: 110,
+              width: 100,
               decoration: BoxDecoration(
                 color: Color(0xFF263238),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withOpacity(0.5),
-                    offset: Offset(0, -2),
+                    offset: Offset(-2, 0),
                     blurRadius: 4,
                   )
                 ],
               ),
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.all(8),
-                children: [
-                  // Bulldozer button
-                  GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        bulldozerMode = !bulldozerMode;
-                        if (bulldozerMode) {
-                          selectedBuilding = null; // Deselect building when enabling bulldozer
-                        }
-                      });
-                    },
-                    child: Container(
-                      width: 85,
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: bulldozerMode
-                              ? [Color(0xFFFF5722), Color(0xFFD84315)] // Active: red/orange
-                              : [Color(0xFF757575), Color(0xFF424242)], // Inactive: gray
-                        ),
-                        border: Border.all(
-                          color: bulldozerMode ? Colors.yellow : Colors.black,
-                          width: bulldozerMode ? 3 : 2,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.4),
-                            offset: Offset(2, 2),
-                            blurRadius: 4,
-                          )
-                        ],
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            '🚜',
-                            style: TextStyle(fontSize: 28),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Bulldozer',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.black,
-                                  offset: Offset(1, 1),
-                                )
-                              ],
-                            ),
-                          ),
-                          Text(
-                            bulldozerMode ? 'ACTIVE' : 'Demolish',
-                            style: TextStyle(
-                              color: bulldozerMode ? Colors.yellow : Colors.white,
-                              fontSize: 9,
-                              fontWeight: bulldozerMode ? FontWeight.bold : FontWeight.normal,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.black,
-                                  offset: Offset(1, 1),
-                                )
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // Building buttons
-                  ...buildings.entries.map((entry) {
-                  final building = entry.value;
-                  final isSelected = selectedBuilding == entry.key;
-                  final canAfford = coins >= building.cost;
-                  final isUnlocked = isBuildingUnlocked(entry.key);
-                  final requiredLevel = buildingUnlockLevel[entry.key] ?? 1;
-
-                  return GestureDetector(
-                    onTap: (canAfford && isUnlocked)
-                        ? () {
-                            setState(() {
-                              bulldozerMode = false; // Disable bulldozer when selecting building
-                              selectedBuilding = isSelected ? null : entry.key;
-                            });
-                          }
-                        : null,
-                    child: Container(
-                      width: 85,
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: !isUnlocked
-                              ? [Color(0xFF424242), Color(0xFF212121)] // Locked: very dark
-                              : isSelected
-                                  ? [Color(0xFFFFC107), Color(0xFFF57F17)] // Selected: gold
-                                  : canAfford
-                                      ? [building.topColor, building.sideColor] // Can afford: building colors
-                                      : [Color(0xFF616161), Color(0xFF424242)], // Can't afford: gray
-                        ),
-                        border: Border.all(
-                          color: isSelected ? Colors.white : Colors.black,
-                          width: isSelected ? 3 : 2,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.4),
-                            offset: Offset(2, 2),
-                            blurRadius: 4,
-                          )
-                        ],
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              Text(
-                                building.emoji,
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  color: isUnlocked ? null : Colors.white.withOpacity(0.3),
-                                ),
-                              ),
-                              if (!isUnlocked)
-                                Text(
-                                  '🔒',
-                                  style: TextStyle(fontSize: 22),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            building.name,
-                            style: TextStyle(
-                              color: isUnlocked ? Colors.white : Colors.white.withOpacity(0.5),
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.black,
-                                  offset: Offset(1, 1),
-                                )
-                              ],
-                            ),
-                          ),
-                          Text(
-                            isUnlocked ? '💰 ${building.cost}' : '🔒 Lv $requiredLevel',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.black,
-                                  offset: Offset(1, 1),
-                                )
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }).toList(),
-                ],
-              ),
+              child: expandedCategory == null
+                  ? _buildCategoryMenu()
+                  : _buildItemMenu(),
             ),
           ],
         ),
@@ -1112,7 +2346,329 @@ class _CityScreenState extends State<CityScreen> {
     );
   }
 
+  // Build the category menu (main view) - Vertical layout for side panel
+  Widget _buildCategoryMenu() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 8.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          // Info mode
+          _buildCategoryButton(
+            label: 'Info',
+            emoji: '🔍',
+            isActive: infoMode,
+            onTap: () {
+              setState(() {
+                infoMode = !infoMode;
+                bulldozerMode = false;
+                selectedBuilding = null;
+              });
+            },
+          ),
+          // Bulldozer
+          _buildCategoryButton(
+            label: 'Doze',
+            emoji: '🚧',
+            isActive: bulldozerMode,
+            onTap: () {
+              setState(() {
+                bulldozerMode = !bulldozerMode;
+                infoMode = false;
+                selectedBuilding = null;
+              });
+            },
+          ),
+          // Zones
+          _buildCategoryButton(
+            label: 'Zones',
+            emoji: '🏘️',
+            onTap: () {
+              setState(() {
+                expandedCategory = 'zones';
+                bulldozerMode = false;
+                infoMode = false;
+              });
+            },
+          ),
+          // Utilities
+          _buildCategoryButton(
+            label: 'Utils',
+            emoji: '⚡',
+            onTap: () {
+              setState(() {
+                expandedCategory = 'utilities';
+                bulldozerMode = false;
+                infoMode = false;
+              });
+            },
+          ),
+          // Services
+          _buildCategoryButton(
+            label: 'Svc',
+            emoji: '🚓',
+            onTap: () {
+              setState(() {
+                expandedCategory = 'services';
+                bulldozerMode = false;
+                infoMode = false;
+              });
+            },
+          ),
+          // Special
+          _buildCategoryButton(
+            label: 'Park',
+            emoji: '🌳',
+            onTap: () {
+              setState(() {
+                expandedCategory = 'special';
+                bulldozerMode = false;
+                infoMode = false;
+              });
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Build a category button - Compact vertical style
+  Widget _buildCategoryButton({
+    required String label,
+    required String emoji,
+    bool isActive = false,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? Color(0xFF4CAF50) : Color(0xFF37474F),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isActive ? Color(0xFF66BB6A) : Color(0xFF546E7A),
+            width: 2,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              emoji,
+              style: TextStyle(fontSize: 24),
+            ),
+            SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 8,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Build the item menu (expanded category view) - Vertical scrolling list
+  Widget _buildItemMenu() {
+    // Determine which items to show based on expandedCategory
+    List<CellType> items = [];
+
+    if (expandedCategory == 'zones') {
+      items = [
+        CellType.residentialZone,
+        CellType.commercialZone,
+        CellType.industrialZone,
+      ];
+    } else if (expandedCategory == 'utilities') {
+      items = [
+        CellType.powerPlant,
+        CellType.waterPump,
+      ];
+    } else if (expandedCategory == 'services') {
+      items = [
+        CellType.policeStation,
+        CellType.fireStation,
+        CellType.hospital,
+        CellType.school,
+        CellType.library,
+        CellType.museum,
+        CellType.stadium,
+        CellType.cityHall,
+      ];
+    } else if (expandedCategory == 'special') {
+      items = [
+        CellType.park,
+        CellType.playground,
+        CellType.fountain,
+        CellType.garden,
+        CellType.statue,
+      ];
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 6.0),
+      child: Column(
+        children: [
+          // Back button
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                expandedCategory = null;
+                selectedBuilding = null;
+                bulldozerMode = false;
+                infoMode = false;
+              });
+            },
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: Color(0xFF37474F),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Icon(Icons.arrow_back, color: Colors.white, size: 16),
+            ),
+          ),
+          SizedBox(height: 6),
+          // Items in this category (vertical scroll)
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                children: items.map((cellType) {
+                  final building = buildings[cellType]!;
+                  final isSelected = selectedBuilding == cellType;
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6.0),
+                    child: GestureDetector(
+                      onTap: () {
+                        print('Selected building: ${building.name}');
+                        setState(() {
+                          selectedBuilding = cellType;
+                          bulldozerMode = false;
+                          infoMode = false;
+                        });
+                      },
+                      child: Container(
+                        padding: EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: isSelected ? building.topColor : Color(0xFF37474F),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: isSelected ? Colors.white : Color(0xFF546E7A),
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              building.emoji,
+                              style: TextStyle(fontSize: 20),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              building.name,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            SizedBox(height: 1),
+                            Text(
+                              '\$${building.cost}',
+                              style: TextStyle(
+                                color: Color(0xFFFFC107),
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCell(CellType cellType, int row, int col) {
+    // UNDERGROUND VIEW - Show only power/water infrastructure
+    if (undergroundView) {
+      if (cellType == CellType.powerPlant || cellType == CellType.powerLine) {
+        // Show power infrastructure in bright yellow/orange
+        return Container(
+          decoration: BoxDecoration(
+            color: powerGrid[row][col] ? Color(0xFFFFEB3B) : Color(0xFF9E9E9E),
+            border: Border.all(color: Color(0xFFF57F17), width: 1),
+          ),
+          child: Center(
+            child: Text('⚡', style: TextStyle(fontSize: 8)),
+          ),
+        );
+      } else if (cellType == CellType.waterPump || cellType == CellType.waterPipe) {
+        // Show water infrastructure in bright blue
+        return Container(
+          decoration: BoxDecoration(
+            color: waterGrid[row][col] ? Color(0xFF00BCD4) : Color(0xFF9E9E9E),
+            border: Border.all(color: Color(0xFF006064), width: 1),
+          ),
+          child: Center(
+            child: Text('💧', style: TextStyle(fontSize: 8)),
+          ),
+        );
+      } else if (cellType == CellType.powerLineAndWaterPipe) {
+        // Show combined infrastructure with gradient/split view
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                powerGrid[row][col] ? Color(0xFFFFEB3B) : Color(0xFF9E9E9E),
+                waterGrid[row][col] ? Color(0xFF00BCD4) : Color(0xFF9E9E9E),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            border: Border.all(color: Color(0xFF616161), width: 1),
+          ),
+          child: Center(
+            child: Text('⚡💧', style: TextStyle(fontSize: 6)),
+          ),
+        );
+      } else if (cellType == CellType.street) {
+        // Show streets dimmed
+        return Container(
+          decoration: BoxDecoration(
+            color: Color(0xFF616161),
+            border: Border.all(color: Color(0xFF757575), width: 0.5),
+          ),
+        );
+      } else {
+        // Everything else is dimmed/hidden
+        return Container(
+          decoration: BoxDecoration(
+            color: Color(0xFF424242).withOpacity(0.3),
+            border: Border.all(color: Color(0xFF616161), width: 0.5),
+          ),
+        );
+      }
+    }
+
+    // SURFACE VIEW - Normal rendering
     if (cellType == CellType.street) {
       // Street cell - dark gray asphalt
       return Container(
@@ -1131,6 +2687,44 @@ class _CityScreenState extends State<CityScreen> {
           ),
         ),
       );
+    } else if (cellType == CellType.powerLine) {
+      // Power line - show as street with power indicator
+      return Container(
+        decoration: BoxDecoration(
+          color: Color(0xFF424242), // Street color
+          border: Border.all(color: Color(0xFFF57F17), width: 1), // Power color border
+        ),
+        child: Center(
+          child: Text('⚡', style: TextStyle(fontSize: 8)),
+        ),
+      );
+    } else if (cellType == CellType.waterPipe) {
+      // Water pipe - show as street with water indicator
+      return Container(
+        decoration: BoxDecoration(
+          color: Color(0xFF424242), // Street color
+          border: Border.all(color: Color(0xFF00BCD4), width: 1), // Water color border
+        ),
+        child: Center(
+          child: Text('💧', style: TextStyle(fontSize: 8)),
+        ),
+      );
+    } else if (cellType == CellType.powerLineAndWaterPipe) {
+      // Combined power and water - show as street with both indicators
+      return Container(
+        decoration: BoxDecoration(
+          color: Color(0xFF424242), // Street color
+          gradient: LinearGradient(
+            colors: [Color(0xFFF57F17).withOpacity(0.3), Color(0xFF00BCD4).withOpacity(0.3)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          border: Border.all(color: Color(0xFF9C27B0), width: 1), // Purple border for combined
+        ),
+        child: Center(
+          child: Text('⚡💧', style: TextStyle(fontSize: 6)),
+        ),
+      );
     } else if (cellType == CellType.empty) {
       // Empty lot - grass
       return Container(
@@ -1140,19 +2734,70 @@ class _CityScreenState extends State<CityScreen> {
         ),
       );
     } else {
-      // Building - TRUE isometric 3D pixel art style
+      // Building - Check if it should use isometric 3D or simple flat style
       final building = buildings[cellType]!;
-      return _buildIsometricBuilding(building);
+
+      // Check if it's a park
+      bool isPark = cellType == CellType.park ||
+                    cellType == CellType.playground ||
+                    cellType == CellType.fountain ||
+                    cellType == CellType.garden ||
+                    cellType == CellType.statue;
+
+      // Use simple flat blocks for zones and infrastructure only
+      bool isZoneOrInfra = cellType == CellType.residentialZone ||
+                           cellType == CellType.commercialZone ||
+                           cellType == CellType.industrialZone ||
+                           cellType == CellType.powerPlant ||
+                           cellType == CellType.waterPump;
+
+      if (isPark) {
+        // Use special isometric park rendering
+        return _buildIsometricPark(building, cellType, row, col);
+      } else if (isZoneOrInfra) {
+        return _buildSimpleBuilding(building, cellType);
+      } else {
+        // Use isometric 3D for actual developed buildings
+        return _buildIsometricBuilding(building, cellType, row, col);
+      }
     }
   }
 
-  Widget _buildIsometricBuilding(Building building) {
-    // Isometric building with windows, no emoji overlay
+  Widget _buildSimpleBuilding(Building building, CellType cellType) {
+    // Simple flat style for zones and infrastructure
+    return Container(
+      decoration: BoxDecoration(
+        color: building.topColor,
+        border: Border.all(color: building.sideColor, width: 1),
+      ),
+      child: Center(
+        child: Text(
+          building.emoji,
+          style: TextStyle(fontSize: 8),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildIsometricBuilding(Building building, CellType cellType, int row, int col) {
+    // Isometric 3D building with height variation and construction animation
+    double progress = constructionProgress[row][col];
     return Container(
       color: Color(0xFF66BB6A), // Grass background
       child: CustomPaint(
-        painter: IsometricBuildingPainter(building),
-        child: SizedBox.expand(), // Ensures CustomPaint fills the cell
+        painter: IsometricBuildingPainter(building, cellType, progress),
+        child: SizedBox.expand(),
+      ),
+    );
+  }
+
+  Widget _buildIsometricPark(Building building, CellType cellType, int row, int col) {
+    // Isometric 3D park - lower profile, green, organic
+    return Container(
+      color: Color(0xFF66BB6A), // Grass background
+      child: CustomPaint(
+        painter: IsometricParkPainter(building, cellType),
+        child: SizedBox.expand(),
       ),
     );
   }
@@ -1187,6 +2832,12 @@ class _CityScreenState extends State<CityScreen> {
     );
   }
 
+  String _formatTime(int seconds) {
+    int minutes = seconds ~/ 60;
+    int secs = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
   Widget _buildStatChip(String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1218,23 +2869,166 @@ class _CityScreenState extends State<CityScreen> {
       ),
     );
   }
+
+  Widget _buildSpeedButton(String text, GameSpeed speed, Color color) {
+    bool isSelected = gameSpeed == speed;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          gameSpeed = speed;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? color : color.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? Colors.black : Colors.grey,
+            width: isSelected ? 2 : 1,
+          ),
+          boxShadow: isSelected ? [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              offset: Offset(2, 2),
+              blurRadius: 2,
+            )
+          ] : null,
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.white.withOpacity(0.7),
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 10,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDemandBar(String label, double demand, Color color) {
+    // Demand ranges from -100 to +100
+    // Positive = high demand (bar goes up)
+    // Negative = low demand (bar goes down)
+    final demandNormalized = (demand / 100.0).clamp(-1.0, 1.0);
+    final isPositive = demandNormalized > 0;
+    final barHeight = demandNormalized.abs() * 50; // Max 50px (was 20px) - taller bars
+
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 10,
+            shadows: [Shadow(color: Colors.black, offset: Offset(1, 1))],
+          ),
+        ),
+        SizedBox(height: 2),
+        Container(
+          width: 20, // Fixed width - skinnier bars
+          height: 60, // Taller container (was 24px)
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.3),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Positive demand bar (grows upward)
+              Container(
+                height: isPositive ? barHeight : 0,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Center line
+              Container(height: 2, color: Colors.white.withOpacity(0.8)), // Thicker, more visible line
+              // Negative demand bar (grows downward)
+              Container(
+                height: !isPositive ? barHeight : 0,
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // Custom painter for isometric buildings
 class IsometricBuildingPainter extends CustomPainter {
   final Building building;
+  final CellType cellType;
+  final double constructionProgress; // 0.0 to 1.0
 
-  IsometricBuildingPainter(this.building);
+  IsometricBuildingPainter(this.building, this.cellType, this.constructionProgress);
+
+  double _getBuildingHeightMultiplier() {
+    // Different heights for different building types
+    switch (cellType) {
+      // Small buildings
+      case CellType.residentialLow:
+        return 0.6;
+      case CellType.commercialLow:
+        return 0.7;
+      case CellType.industrialLow:
+        return 0.5;
+
+      // Medium buildings
+      case CellType.residentialMedium:
+        return 1.0;
+      case CellType.commercialMedium:
+        return 1.1;
+      case CellType.industrialMedium:
+        return 0.8;
+
+      // Tall buildings
+      case CellType.residentialHigh:
+        return 1.5;
+      case CellType.commercialHigh:
+        return 1.7;
+      case CellType.industrialHigh:
+        return 1.2;
+
+      // Services - medium height
+      case CellType.policeStation:
+      case CellType.fireStation:
+      case CellType.hospital:
+      case CellType.school:
+      case CellType.library:
+      case CellType.museum:
+        return 0.9;
+
+      // Large services
+      case CellType.stadium:
+        return 1.3;
+      case CellType.cityHall:
+        return 1.4;
+
+      default:
+        return 1.0;
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..style = PaintingStyle.fill;
 
-    // Building dimensions - TALLER for more 3D effect
+    // Building dimensions with height variation and construction animation
     final centerX = size.width / 2;
     final baseY = size.height * 0.85; // Bottom of building
     final buildingWidth = size.width * 0.75;
-    final buildingHeight = size.height * 1.2; // MUCH taller!
+    final heightMultiplier = _getBuildingHeightMultiplier();
+    final fullBuildingHeight = size.height * 1.2 * heightMultiplier; // Variable height!
+    final buildingHeight = fullBuildingHeight * constructionProgress; // Animate construction!
 
     // Calculate key points for isometric building
     final topCenterY = baseY - buildingHeight;
@@ -1273,23 +3067,27 @@ class IsometricBuildingPainter extends CustomPainter {
     paint.color = Color.lerp(building.topColor, building.sideColor, 0.4)!;
     canvas.drawPath(rightPath, paint);
 
-    // Draw windows on the building faces (LARGER and MORE VISIBLE)
+    // Draw windows on the building faces - proper parallelograms
     paint.style = PaintingStyle.fill;
     paint.color = Color(0xFF64B5F6); // Brighter blue windows
 
     // Windows on left face (4 rows of 1 window each)
-    final windowWidth = buildingWidth / 5;
-    final windowHeight = buildingHeight / 8;
+    final windowWidth = buildingWidth / 6;
+    final windowHeight = buildingHeight / 10;
 
     for (int floor = 0; floor < 4; floor++) {
       final windowY = baseY - buildingHeight * 0.8 + (floor * buildingHeight * 0.22);
 
-      // Left face window (skewed perspective) - LARGER
+      // Left face window - proper parallelogram following wall perspective
       final leftWindowPath = Path();
+      // Top-left corner
       leftWindowPath.moveTo(centerX - buildingWidth / 4.5, windowY);
-      leftWindowPath.lineTo(centerX - buildingWidth / 8, windowY + windowHeight * 0.25);
-      leftWindowPath.lineTo(centerX - buildingWidth / 8, windowY + windowHeight * 0.75);
-      leftWindowPath.lineTo(centerX - buildingWidth / 4.5, windowY + windowHeight);
+      // Top-right corner (toward center)
+      leftWindowPath.lineTo(centerX - buildingWidth / 8, windowY + windowHeight * 0.2);
+      // Bottom-right corner
+      leftWindowPath.lineTo(centerX - buildingWidth / 8, windowY + windowHeight);
+      // Bottom-left corner
+      leftWindowPath.lineTo(centerX - buildingWidth / 4.5, windowY + windowHeight * 0.8);
       leftWindowPath.close();
       canvas.drawPath(leftWindowPath, paint);
 
@@ -1306,12 +3104,16 @@ class IsometricBuildingPainter extends CustomPainter {
     for (int floor = 0; floor < 4; floor++) {
       final windowY = baseY - buildingHeight * 0.8 + (floor * buildingHeight * 0.22);
 
-      // Right face window (skewed perspective) - LARGER
+      // Right face window - proper parallelogram following wall perspective
       final rightWindowPath = Path();
-      rightWindowPath.moveTo(centerX + buildingWidth / 4.5, windowY);
-      rightWindowPath.lineTo(centerX + buildingWidth / 8, windowY + windowHeight * 0.25);
-      rightWindowPath.lineTo(centerX + buildingWidth / 8, windowY + windowHeight * 0.75);
-      rightWindowPath.lineTo(centerX + buildingWidth / 4.5, windowY + windowHeight);
+      // Top-left corner (toward center)
+      rightWindowPath.moveTo(centerX + buildingWidth / 8, windowY + windowHeight * 0.2);
+      // Top-right corner
+      rightWindowPath.lineTo(centerX + buildingWidth / 4.5, windowY);
+      // Bottom-right corner
+      rightWindowPath.lineTo(centerX + buildingWidth / 4.5, windowY + windowHeight * 0.8);
+      // Bottom-left corner
+      rightWindowPath.lineTo(centerX + buildingWidth / 8, windowY + windowHeight);
       rightWindowPath.close();
       canvas.drawPath(rightWindowPath, paint);
 
@@ -1332,6 +3134,93 @@ class IsometricBuildingPainter extends CustomPainter {
     canvas.drawPath(topPath, paint);
     canvas.drawPath(leftPath, paint);
     canvas.drawPath(rightPath, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// Park painter - low profile, green, organic 3D isometric parks
+class IsometricParkPainter extends CustomPainter {
+  final Building building;
+  final CellType cellType;
+
+  IsometricParkPainter(this.building, this.cellType);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+
+    // Park dimensions - much lower than buildings!
+    final centerX = size.width / 2;
+    final baseY = size.height * 0.75; // Lower base
+    final parkWidth = size.width * 0.8; // Slightly wider
+    final parkHeight = size.height * 0.3; // Much shorter than buildings!
+
+    // Calculate key points
+    final topCenterY = baseY - parkHeight;
+
+    // Top face - organic diamond shape
+    final topPath = Path();
+    topPath.moveTo(centerX, topCenterY); // Top point
+    topPath.lineTo(centerX + parkWidth / 2.5, topCenterY + parkHeight * 0.2); // Right
+    topPath.lineTo(centerX, topCenterY + parkHeight * 0.35); // Bottom
+    topPath.lineTo(centerX - parkWidth / 2.5, topCenterY + parkHeight * 0.2); // Left
+    topPath.close();
+
+    // Lighter green for top
+    paint.color = building.topColor;
+    canvas.drawPath(topPath, paint);
+
+    // Left face - darker green
+    final leftPath = Path();
+    leftPath.moveTo(centerX - parkWidth / 2.5, topCenterY + parkHeight * 0.2);
+    leftPath.lineTo(centerX, topCenterY + parkHeight * 0.35);
+    leftPath.lineTo(centerX, baseY);
+    leftPath.lineTo(centerX - parkWidth / 2.5, baseY - parkHeight * 0.15);
+    leftPath.close();
+
+    paint.color = building.sideColor;
+    canvas.drawPath(leftPath, paint);
+
+    // Right face - medium green
+    final rightPath = Path();
+    rightPath.moveTo(centerX + parkWidth / 2.5, topCenterY + parkHeight * 0.2);
+    rightPath.lineTo(centerX, topCenterY + parkHeight * 0.35);
+    rightPath.lineTo(centerX, baseY);
+    rightPath.lineTo(centerX + parkWidth / 2.5, baseY - parkHeight * 0.15);
+    rightPath.close();
+
+    paint.color = Color.lerp(building.topColor, building.sideColor, 0.5)!;
+    canvas.drawPath(rightPath, paint);
+
+    // Black outlines for definition
+    paint.style = PaintingStyle.stroke;
+    paint.strokeWidth = 1.5;
+    paint.color = Colors.black.withOpacity(0.6); // Softer outline for parks
+
+    canvas.drawPath(topPath, paint);
+    canvas.drawPath(leftPath, paint);
+    canvas.drawPath(rightPath, paint);
+
+    // Draw emoji on top of park
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: building.emoji,
+        style: TextStyle(
+          fontSize: size.width * 0.4, // Large emoji
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      Offset(
+        centerX - textPainter.width / 2,
+        topCenterY - textPainter.height / 2,
+      ),
+    );
   }
 
   @override
