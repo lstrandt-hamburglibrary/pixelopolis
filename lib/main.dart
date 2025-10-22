@@ -195,6 +195,9 @@ class _CityScreenState extends State<CityScreen> {
   // Building upgrades (stores upgrade level 0-2 for each cell)
   List<List<int>> buildingUpgrades = [];
 
+  // Building active state (true = on/active, false = off/inactive)
+  List<List<bool>> buildingActive = [];
+
   // Construction progress (0.0 = just started, 1.0 = complete)
   List<List<double>> constructionProgress = [];
   Timer? constructionAnimationTimer;
@@ -578,6 +581,11 @@ class _CityScreenState extends State<CityScreen> {
         return List.generate(gridSize, (col) => 0);
       });
     }
+    if (buildingActive.isEmpty) {
+      buildingActive = List.generate(gridSize, (row) {
+        return List.generate(gridSize, (col) => true); // All buildings start active
+      });
+    }
     if (constructionProgress.isEmpty) {
       constructionProgress = List.generate(gridSize, (row) {
         return List.generate(gridSize, (col) => 1.0); // Start fully constructed
@@ -730,9 +738,9 @@ class _CityScreenState extends State<CityScreen> {
 
     // Place water pumps at strategic locations
     cityGrid[8][9] = CellType.waterPump;
+    cityGrid[8][21] = CellType.waterPump;
     cityGrid[22][9] = CellType.waterPump;
-    cityGrid[21][8] = CellType.waterPump;
-    cityGrid[22][22] = CellType.waterPump;
+    cityGrid[21][22] = CellType.waterPump;
 
     // Set power and water coverage based on challenge mode
     if (infrastructureRequired) {
@@ -776,9 +784,9 @@ class _CityScreenState extends State<CityScreen> {
     // Find all power plants and apply coverage radius
     for (int row = 0; row < gridSize; row++) {
       for (int col = 0; col < gridSize; col++) {
-        if (cityGrid[row][col] == CellType.powerPlant) {
-          // Apply power coverage in 8-square radius
-          _applyPowerCoverage(row, col, 8);
+        if (cityGrid[row][col] == CellType.powerPlant && buildingActive[row][col]) {
+          // Apply power coverage in 10-square radius (only if active)
+          _applyPowerCoverage(row, col, 10);
         }
       }
     }
@@ -787,8 +795,8 @@ class _CityScreenState extends State<CityScreen> {
   void _applyPowerCoverage(int centerRow, int centerCol, int radius) {
     for (int row = 0; row < gridSize; row++) {
       for (int col = 0; col < gridSize; col++) {
-        // Calculate distance from power plant
-        double distance = sqrt(pow(row - centerRow, 2) + pow(col - centerCol, 2));
+        // Calculate distance from power plant (Chebyshev distance - diagonals count as 1)
+        int distance = max((row - centerRow).abs(), (col - centerCol).abs());
         if (distance <= radius) {
           powerGrid[row][col] = true;
         }
@@ -806,9 +814,9 @@ class _CityScreenState extends State<CityScreen> {
     // Find all water pumps and apply coverage radius
     for (int row = 0; row < gridSize; row++) {
       for (int col = 0; col < gridSize; col++) {
-        if (cityGrid[row][col] == CellType.waterPump) {
-          // Apply water coverage in 8-square radius
-          _applyWaterCoverage(row, col, 8);
+        if (cityGrid[row][col] == CellType.waterPump && buildingActive[row][col]) {
+          // Apply water coverage in 10-square radius (only if active)
+          _applyWaterCoverage(row, col, 10);
         }
       }
     }
@@ -817,8 +825,8 @@ class _CityScreenState extends State<CityScreen> {
   void _applyWaterCoverage(int centerRow, int centerCol, int radius) {
     for (int row = 0; row < gridSize; row++) {
       for (int col = 0; col < gridSize; col++) {
-        // Calculate distance from water pump
-        double distance = sqrt(pow(row - centerRow, 2) + pow(col - centerCol, 2));
+        // Calculate distance from water pump (Chebyshev distance - diagonals count as 1)
+        int distance = max((row - centerRow).abs(), (col - centerCol).abs());
         if (distance <= radius) {
           waterGrid[row][col] = true;
         }
@@ -1014,19 +1022,19 @@ class _CityScreenState extends State<CityScreen> {
           if (cellType == CellType.residentialZone) {
             cityGrid[row][col] = _getResidentialBuilding();
             constructionProgress[row][col] = 0.0; // Start construction animation
-            population += 10;
+            population += 20;
             residentialDemand -= 10;
             checkAchievements();
           } else if (cellType == CellType.commercialZone) {
             cityGrid[row][col] = _getCommercialBuilding();
             constructionProgress[row][col] = 0.0; // Start construction animation
-            population += 5;
+            population += 10;
             commercialDemand -= 10;
             checkAchievements();
           } else if (cellType == CellType.industrialZone) {
             cityGrid[row][col] = _getIndustrialBuilding();
             constructionProgress[row][col] = 0.0; // Start construction animation
-            population += 3;
+            population += 6;
             industrialDemand -= 10;
             checkAchievements();
           }
@@ -1140,13 +1148,16 @@ class _CityScreenState extends State<CityScreen> {
 
     // SimCity-style demand calculation (rebalanced for better gameplay)
     // Residential demand: More jobs = more demand, more housing = less demand
-    residentialDemand = ((commercial + industrial) * 3.0 - residential * 2.0).clamp(-100, 100);
+    // Add base demand of +30 to ensure early growth
+    residentialDemand = (((commercial + industrial) * 3.0 - residential * 2.0) + 30).clamp(-100, 100);
 
     // Commercial demand: More residents = more demand, more shops = less demand
-    commercialDemand = (residential * 2.0 - commercial * 3.0).clamp(-100, 100);
+    // Add base demand of +20 to ensure early growth
+    commercialDemand = ((residential * 2.0 - commercial * 3.0) + 20).clamp(-100, 100);
 
     // Industrial demand: More commercial = more demand (supply chain), more factories = less demand
-    industrialDemand = (commercial * 2.0 - industrial * 3.0).clamp(-100, 100);
+    // Add base demand of +25 to ensure early growth
+    industrialDemand = ((commercial * 2.0 - industrial * 3.0) + 25).clamp(-100, 100);
   }
 
   // ACHIEVEMENT SYSTEM
@@ -1454,7 +1465,11 @@ class _CityScreenState extends State<CityScreen> {
             income += buildingIncome * multiplier;
           } else if (buildingIncome < 0) {
             // Negative income = maintenance cost
-            expenses += buildingIncome.abs();
+            // Only charge maintenance for active infrastructure
+            bool isInfrastructure = cell == CellType.powerPlant || cell == CellType.waterPump;
+            if (!isInfrastructure || buildingActive[row][col]) {
+              expenses += buildingIncome.abs();
+            }
           }
         }
       }
@@ -1527,6 +1542,13 @@ class _CityScreenState extends State<CityScreen> {
       }
       await prefs.setStringList('buildingUpgrades', upgradesData);
 
+      // Save building active state
+      List<String> activeData = [];
+      for (var row in buildingActive) {
+        activeData.add(row.map((active) => active ? '1' : '0').join(','));
+      }
+      await prefs.setStringList('buildingActive', activeData);
+
       print('Game saved successfully!');
     } catch (e) {
       print('Error saving game: $e');
@@ -1574,6 +1596,17 @@ class _CityScreenState extends State<CityScreen> {
           buildingUpgrades = loadedUpgrades;
         }
 
+        // Load building active state
+        final activeData = prefs.getStringList('buildingActive');
+        if (activeData != null && activeData.length == gridSize) {
+          List<List<bool>> loadedActive = [];
+          for (var rowData in activeData) {
+            List<bool> row = rowData.split(',').map((str) => str == '1').toList();
+            loadedActive.add(row);
+          }
+          buildingActive = loadedActive;
+        }
+
         print('Game loaded successfully!');
       }
     } catch (e) {
@@ -1619,6 +1652,9 @@ class _CityScreenState extends State<CityScreen> {
         buildingUpgrades = List.generate(gridSize, (row) {
           return List.generate(gridSize, (col) => 0);
         });
+        buildingActive = List.generate(gridSize, (row) {
+          return List.generate(gridSize, (col) => true);
+        });
         constructionProgress = List.generate(gridSize, (row) {
           return List.generate(gridSize, (col) => 1.0);
         });
@@ -1661,6 +1697,21 @@ class _CityScreenState extends State<CityScreen> {
     if (bulldozerMode) {
       demolishBuilding(row, col);
       return;
+    }
+
+    // Toggle infrastructure on/off when clicked (if no building selected)
+    if (selectedBuilding == null) {
+      final cellType = cityGrid[row][col];
+      if (cellType == CellType.powerPlant || cellType == CellType.waterPump) {
+        setState(() {
+          buildingActive[row][col] = !buildingActive[row][col];
+          updatePowerGrid();
+          updateWaterGrid();
+          addFloatingText(buildingActive[row][col] ? '⚡ ON' : '⏸️ OFF', row.toDouble(), col.toDouble());
+        });
+        saveGame();
+        return;
+      }
     }
 
     // In SimCity, buildings auto-upgrade, not manual upgrades
@@ -2933,7 +2984,7 @@ class _CityScreenState extends State<CityScreen> {
         // Use special isometric park rendering
         return _buildIsometricPark(building, cellType, row, col);
       } else if (isZoneOrInfra) {
-        return _buildSimpleBuilding(building, cellType);
+        return _buildSimpleBuilding(building, cellType, row, col);
       } else {
         // Use isometric 3D for actual developed buildings
         return _buildIsometricBuilding(building, cellType, row, col);
@@ -2941,18 +2992,45 @@ class _CityScreenState extends State<CityScreen> {
     }
   }
 
-  Widget _buildSimpleBuilding(Building building, CellType cellType) {
+  Widget _buildSimpleBuilding(Building building, CellType cellType, int row, int col) {
     // Simple flat style for zones and infrastructure
+    // Check if this is an inactive infrastructure building
+    bool isInfrastructure = cellType == CellType.powerPlant || cellType == CellType.waterPump;
+    bool isActive = buildingActive[row][col];
+
     return Container(
       decoration: BoxDecoration(
-        color: building.topColor,
+        color: (isInfrastructure && !isActive)
+            ? building.topColor.withOpacity(0.4)
+            : building.topColor,
         border: Border.all(color: building.sideColor, width: 1),
       ),
-      child: Center(
-        child: Text(
-          building.emoji,
-          style: TextStyle(fontSize: 8),
-        ),
+      child: Stack(
+        children: [
+          Center(
+            child: Opacity(
+              opacity: (isInfrastructure && !isActive) ? 0.5 : 1.0,
+              child: Text(
+                building.emoji,
+                style: TextStyle(fontSize: 8),
+              ),
+            ),
+          ),
+          // Show OFF indicator for inactive infrastructure
+          if (isInfrastructure && !isActive)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Container(
+                padding: EdgeInsets.all(1),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  shape: BoxShape.circle,
+                ),
+                child: Text('⏸️', style: TextStyle(fontSize: 4)),
+              ),
+            ),
+        ],
       ),
     );
   }
