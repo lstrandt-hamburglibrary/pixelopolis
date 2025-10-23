@@ -183,6 +183,9 @@ class _CityScreenState extends State<CityScreen> {
   // Menu category expansion
   String? expandedCategory; // null, 'zones', 'utilities', 'services', 'special'
 
+  // Zoom level for city grid (0.5x to 3.0x)
+  double zoomLevel = 1.0;
+
   // Progression system
   int playerLevel = 1;
   int experience = 0;
@@ -665,7 +668,7 @@ class _CityScreenState extends State<CityScreen> {
     });
 
     // Zone growth timer - zones develop into buildings AND buildings auto-upgrade
-    zoneGrowthTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    zoneGrowthTimer = Timer.periodic(const Duration(seconds: 6), (_) {
       processZoneGrowth();
       processBuildingEvolution();
       updateCityStatistics(); // Update crime, education, health stats
@@ -998,9 +1001,9 @@ class _CityScreenState extends State<CityScreen> {
     final random = Random();
 
     // Adjust growth rate based on game speed
-    int attempts = 3; // Medium speed default
+    int attempts = 1; // Medium speed default - slow gradual growth
     if (gameSpeed == GameSpeed.slow) attempts = 1;
-    if (gameSpeed == GameSpeed.fast) attempts = 6;
+    if (gameSpeed == GameSpeed.fast) attempts = 3;
 
     // Try to grow a few zones each tick
     for (int attempt = 0; attempt < attempts; attempt++) {
@@ -2306,6 +2309,59 @@ class _CityScreenState extends State<CityScreen> {
                           ),
                         ),
                       ),
+                      // Zoom controls
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                zoomLevel = (zoomLevel - 0.2).clamp(0.5, 3.0);
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Color(0xFF9C27B0),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.black, width: 2),
+                              ),
+                              child: Text(
+                                '🔍-',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                zoomLevel = (zoomLevel + 0.2).clamp(0.5, 3.0);
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Color(0xFF9C27B0),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.black, width: 2),
+                              ),
+                              child: Text(
+                                '🔍+',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                   SizedBox(height: 6),
@@ -2387,9 +2443,11 @@ class _CityScreenState extends State<CityScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(8),
                       child: Center(
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: GridView.builder(
+                        child: Transform.scale(
+                          scale: zoomLevel,
+                          child: AspectRatio(
+                            aspectRatio: 1,
+                            child: GridView.builder(
                             physics: const NeverScrollableScrollPhysics(),
                             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: gridSize,
@@ -2436,17 +2494,20 @@ class _CityScreenState extends State<CityScreen> {
                           ),
                         ),
                       ),
+                      ),
                     ),
                   ),
                 // Vehicles overlay - pointer events pass through to grid
                 IgnorePointer(
                     ignoring: false,
                     child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: LayoutBuilder(
+                      child: Transform.scale(
+                        scale: zoomLevel,
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          child: AspectRatio(
+                            aspectRatio: 1,
+                            child: LayoutBuilder(
                             builder: (context, constraints) {
                               final gridWidth = constraints.maxWidth;
                               final cellSize = gridWidth / gridSize;
@@ -2471,6 +2532,7 @@ class _CityScreenState extends State<CityScreen> {
                             },
                           ),
                         ),
+                      ),
                       ),
                     ),
                   ),
